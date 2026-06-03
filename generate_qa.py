@@ -218,6 +218,25 @@ def write_jsonl(pairs: list[dict], path: Path, mode: str = "a") -> None:
             f.write(json.dumps(pair, ensure_ascii=False) + "\n")
 
 
+def load_processed_article_ids(path: Path) -> set[int]:
+    """Load article_ids from existing output file for resume support."""
+    if not path.exists() or path.stat().st_size == 0:
+        return set()
+    ids: set[int] = set()
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+                if "article_id" in record:
+                    ids.add(record["article_id"])
+            except json.JSONDecodeError:
+                continue
+    return ids
+
+
 async def main() -> None:
     n_topics = int(sys.argv[1]) if len(sys.argv) > 1 else 1
     logger.info(f"Starting: n_topics={n_topics}, model={DEEPSEEK_MODEL}, concurrency={MAX_CONCURRENT}")
@@ -225,10 +244,21 @@ async def main() -> None:
     articles = await fetch_wikipedia_articles(n_topics)
     logger.info(f"Loaded {len(articles)} articles")
 
+    # Resume support: skip already-processed articles
+    processed_ids = load_processed_article_ids(OUTPUT_FILE)
+    if processed_ids:
+        before = len(articles)
+        articles = [a for a in articles if a["article_id"] not in processed_ids]
+        logger.info(f"Resume: skipped {before - len(articles)} already-processed articles, {len(articles)} remaining")
+    else:
+        OUTPUT_FILE.write_text("")
+
+    if not articles:
+        logger.info("All articles already processed. Nothing to do.")
+        return
+
     client = make_client()
     semaphore = asyncio.Semaphore(MAX_CONCURRENT)
-
-    OUTPUT_FILE.write_text("")
 
     batch_size = 50
     total_pairs = 0
