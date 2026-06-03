@@ -55,7 +55,6 @@ async def generate_answer(
     title: str,
 ) -> str | None:
     async with semaphore:
-        truncated = context[:4_000] if len(context) > 4_000 else context
         logger.debug(f"[{title}] generating answer for Q: {question[:60]}...")
         t0 = time.monotonic()
 
@@ -66,7 +65,7 @@ async def generate_answer(
                     "model": OLLAMA_MODEL,
                     "messages": [
                         {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": f"Article:\n{truncated}\n\nQuestion: {question}\n\nAnswer:"},
+                        {"role": "user", "content": f"Article:\n{context}\n\nQuestion: {question}\n\nAnswer:"},
                     ],
                     "stream": False,
                     "options": {"num_predict": 1024},
