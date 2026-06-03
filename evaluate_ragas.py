@@ -400,13 +400,32 @@ async def main(
         else:
             logger.info(f"All article claims already cached")
 
-    # Phase 2: evaluate all pairs
-    output_path.write_text("")
+    # Phase 2: evaluate all pairs (with resume support)
+    completed_keys: set[str] = set()
     results: list[dict] = []
+    if output_path.exists():
+        try:
+            for line in output_path.read_text().strip().splitlines():
+                if not line.strip():
+                    continue
+                r = json.loads(line)
+                completed_keys.add(ref_key(r["article_id"], r["question"]))
+                results.append(r)
+            logger.info(f"Resuming: {len(results)} already evaluated, reusing")
+        except Exception:
+            logger.warning("Could not load existing output, starting fresh")
+            output_path.write_text("")
+            results = []
+
+    pending = [p for p in eval_pairs if ref_key(p["article_id"], p["question"]) not in completed_keys]
+    if len(pending) < len(eval_pairs):
+        logger.info(f"Skipping {len(eval_pairs) - len(pending)} already-evaluated pairs, {len(pending)} remaining")
+    if not pending:
+        logger.info("All pairs already evaluated")
     t0 = time.monotonic()
 
-    for batch_start in range(0, len(eval_pairs), MAX_CONCURRENT):
-        batch = eval_pairs[batch_start : batch_start + MAX_CONCURRENT]
+    for batch_start in range(0, len(pending), MAX_CONCURRENT):
+        batch = pending[batch_start : batch_start + MAX_CONCURRENT]
         coros = []
         for p in batch:
             if "model_answer" in p:
@@ -431,7 +450,8 @@ async def main(
                 results.append(r)
 
         output_path.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in results))
-        logger.info(f"Progress: {len(results)}/{len(eval_pairs)} evaluated ({time.monotonic()-t0:.1f}s)")
+        remaining = len(pending) - (batch_start + len(batch))
+        logger.info(f"Progress: {len(results)}/{len(eval_pairs)} evaluated, {max(0, remaining)} remaining ({time.monotonic()-t0:.1f}s)")
 
     # Summary
     elapsed = time.monotonic() - t0
