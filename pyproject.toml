@@ -1,0 +1,14 @@
+[project]
+name = "qa"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "datasets>=4.8.5",
+    "httpx>=0.28.1",
+    "loguru>=0.7.3",
+    "openai>=2.40.0",
+    "ragas>=0.4.3",
+    "sentence-transformers>=5.5.1",
+]
