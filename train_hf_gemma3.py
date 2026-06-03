@@ -63,7 +63,11 @@ def tokenize_fn(examples, tokenizer):
         max_length=MAX_SEQ_LEN,
         padding="max_length",
     )
-    out["labels"] = out["input_ids"].copy()
+    # mask padding tokens in labels with -100 so they're ignored in loss
+    labels = []
+    for ids, mask in zip(out["input_ids"], out["attention_mask"]):
+        labels.append([id if m == 1 else -100 for id, m in zip(ids, mask)])
+    out["labels"] = labels
     return out
 
 # ============================================================================
