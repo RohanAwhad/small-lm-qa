@@ -1,5 +1,6 @@
 """Generate Gemma3 answers for existing QA pairs using article text as context."""
 
+import argparse
 import asyncio
 import json
 import sys
@@ -12,8 +13,6 @@ from loguru import logger
 OLLAMA_URL = "http://localhost:11434/api/chat"
 OLLAMA_MODEL = "gemma3:270m"
 MAX_CONCURRENT = 8
-INPUT_FILE = Path("qa_pairs.jsonl")
-OUTPUT_FILE = Path("qa_pairs_gemma.jsonl")
 LOG_DIR = Path("logs")
 
 LOG_DIR.mkdir(exist_ok=True)
@@ -80,9 +79,13 @@ async def generate_answer(
         return answer
 
 
-async def main() -> None:
-    pairs = [json.loads(l) for l in INPUT_FILE.read_text().strip().splitlines() if l.strip()]
-    logger.info(f"Loaded {len(pairs)} QA pairs from {INPUT_FILE}")
+async def main(input_path: Path, output_path: Path) -> None:
+    raw = input_path.read_text().strip()
+    if raw.startswith("["):
+        pairs = json.loads(raw)
+    else:
+        pairs = [json.loads(l) for l in raw.splitlines() if l.strip()]
+    logger.info(f"Loaded {len(pairs)} QA pairs from {input_path}")
 
     article_ids = {p["article_id"] for p in pairs}
     logger.info(f"Fetching {len(article_ids)} unique articles...")
@@ -90,7 +93,7 @@ async def main() -> None:
     logger.info(f"Fetched {len(article_texts)} article texts")
 
     semaphore = asyncio.Semaphore(MAX_CONCURRENT)
-    OUTPUT_FILE.write_text("")
+    output_path.write_text("")
 
     results: list[dict] = []
     t0 = time.monotonic()
@@ -114,9 +117,16 @@ async def main() -> None:
         if (i + 1) % 10 == 0:
             logger.info(f"Progress: {i+1}/{len(pairs)} ({time.monotonic()-t0:.1f}s)")
 
-    OUTPUT_FILE.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in results))
-    logger.info(f"Done. {len(results)} answers written to {OUTPUT_FILE} in {time.monotonic()-t0:.1f}s")
+    output_path.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in results))
+    logger.info(f"Done. {len(results)} answers written to {output_path} in {time.monotonic()-t0:.1f}s")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description="Generate Gemma3 answers for QA pairs")
+    parser.add_argument("input", nargs="?", default="qa_pairs.jsonl", help="Input JSON/JSONL file (default: qa_pairs.jsonl)")
+    parser.add_argument("-o", "--output", default=None, help="Output JSONL file (default: <input_stem>_gemma.jsonl)")
+    args = parser.parse_args()
+
+    in_path = Path(args.input)
+    out_path = Path(args.output) if args.output else in_path.with_stem(in_path.stem + "_gemma").with_suffix(".jsonl")
+    asyncio.run(main(in_path, out_path))
