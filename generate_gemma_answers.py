@@ -9,6 +9,7 @@ from pathlib import Path
 
 import httpx
 from loguru import logger
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
 OLLAMA_MODEL = "gemma3:270m"
@@ -47,6 +48,37 @@ async def fetch_articles_by_id(article_ids: set[int]) -> dict[int, str]:
     return texts
 
 
+def _should_retry(exc: BaseException) -> bool:
+    if isinstance(exc, httpx.ReadTimeout):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code >= 500
+    return False
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    retry=retry_if_exception(_should_retry),
+    reraise=True,
+)
+async def _call_ollama(http: httpx.AsyncClient, title: str, question: str, context: str) -> str:
+    resp = await http.post(
+        OLLAMA_URL,
+        json={
+            "model": OLLAMA_MODEL,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": f"Article:\n{context}\n\nQuestion: {question}\n\nAnswer:"},
+            ],
+            "stream": False,
+            "options": {"num_predict": 1024},
+        },
+    )
+    resp.raise_for_status()
+    return resp.json()["message"]["content"].strip()
+
+
 async def generate_answer(
     http: httpx.AsyncClient,
     semaphore: asyncio.Semaphore,
@@ -57,31 +89,15 @@ async def generate_answer(
     async with semaphore:
         logger.debug(f"[{title}] generating answer for Q: {question[:60]}...")
         t0 = time.monotonic()
-
-        resp = await http.post(
-            OLLAMA_URL,
-            json={
-                "model": OLLAMA_MODEL,
-                "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": f"Article:\n{context}\n\nQuestion: {question}\n\nAnswer:"},
-                ],
-                "stream": False,
-                "options": {"num_predict": 1024},
-            },
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        answer = data["message"]["content"].strip()
-
+        try:
+            answer = await _call_ollama(http, title, question, context)
+        except Exception as e:
+            elapsed = time.monotonic() - t0
+            logger.error(f"[{title}] failed after retries: {type(e).__name__}: {e} ({elapsed:.1f}s)")
+            return None
         elapsed = time.monotonic() - t0
         logger.info(f"[{title}] answer ({len(answer)} chars) in {elapsed:.1f}s")
         return answer
-
-
-def checkpoint(output_path: Path, results: list[dict], n: int) -> None:
-    output_path.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in results))
-    logger.info(f"Checkpoint: {n} answers written to {output_path}")
 
 
 async def main(input_path: Path, output_path: Path) -> None:
@@ -98,13 +114,8 @@ async def main(input_path: Path, output_path: Path) -> None:
     logger.info(f"Fetched {len(article_texts)} article texts")
 
     semaphore = asyncio.Semaphore(MAX_CONCURRENT)
-    output_path.write_text("")
-
-    results: list[dict] = []
-    seen = 0
 
     async def process_pair(pair: dict) -> dict | None:
-        nonlocal results, seen
         text = article_texts.get(pair["article_id"], "")
         if not text:
             logger.warning(f"[{pair['title']}] article_id={pair['article_id']} not found, skipping")
@@ -112,23 +123,24 @@ async def main(input_path: Path, output_path: Path) -> None:
         answer = await generate_answer(http, semaphore, pair["question"], text, pair["title"])
         if answer is None:
             return None
-        result = {**pair, "model_answer": answer, "model": OLLAMA_MODEL}
-        results.append(result)
-        seen += 1
-        if seen % 50 == 0:
-            checkpoint(output_path, results, seen)
-        return result
+        return {**pair, "model_answer": answer, "model": OLLAMA_MODEL}
 
     t0 = time.monotonic()
-    async with httpx.AsyncClient(timeout=300) as http:
+    written = 0
+    total = len(pairs)
+    async with httpx.AsyncClient(timeout=120) as http:
         tasks = [process_pair(p) for p in pairs]
-        raw = await asyncio.gather(*tasks, return_exceptions=True)
-        errors = [r for r in raw if isinstance(r, Exception)]
-        for e in errors:
-            logger.error(f"Task failed: {e}")
+        with open(output_path, "w") as f:
+            for coro in asyncio.as_completed(tasks):
+                result = await coro
+                if result is not None:
+                    f.write(json.dumps(result, ensure_ascii=False) + "\n")
+                    f.flush()
+                    written += 1
+                    if written % 10 == 0:
+                        logger.info(f"Progress: {written}/{total} ({time.monotonic()-t0:.1f}s)")
 
-    checkpoint(output_path, results, len(pairs))
-    logger.info(f"Done. {len(results)}/{len(pairs)} answers ({len(errors)} errors) in {time.monotonic()-t0:.1f}s")
+    logger.info(f"Done. {written}/{total} answers written to {output_path} in {time.monotonic()-t0:.1f}s")
 
 
 if __name__ == "__main__":
