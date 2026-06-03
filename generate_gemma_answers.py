@@ -12,7 +12,7 @@ from loguru import logger
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
 OLLAMA_MODEL = "gemma3:270m"
-MAX_CONCURRENT = 8
+MAX_CONCURRENT = 4
 LOG_DIR = Path("logs")
 
 LOG_DIR.mkdir(exist_ok=True)
@@ -48,6 +48,7 @@ async def fetch_articles_by_id(article_ids: set[int]) -> dict[int, str]:
 
 
 async def generate_answer(
+    http: httpx.AsyncClient,
     semaphore: asyncio.Semaphore,
     question: str,
     context: str,
@@ -57,26 +58,30 @@ async def generate_answer(
         logger.debug(f"[{title}] generating answer for Q: {question[:60]}...")
         t0 = time.monotonic()
 
-        async with httpx.AsyncClient(timeout=120) as http:
-            resp = await http.post(
-                OLLAMA_URL,
-                json={
-                    "model": OLLAMA_MODEL,
-                    "messages": [
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": f"Article:\n{context}\n\nQuestion: {question}\n\nAnswer:"},
-                    ],
-                    "stream": False,
-                    "options": {"num_predict": 1024},
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            answer = data["message"]["content"].strip()
+        resp = await http.post(
+            OLLAMA_URL,
+            json={
+                "model": OLLAMA_MODEL,
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": f"Article:\n{context}\n\nQuestion: {question}\n\nAnswer:"},
+                ],
+                "stream": False,
+                "options": {"num_predict": 1024},
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        answer = data["message"]["content"].strip()
 
         elapsed = time.monotonic() - t0
         logger.info(f"[{title}] answer ({len(answer)} chars) in {elapsed:.1f}s")
         return answer
+
+
+def checkpoint(output_path: Path, results: list[dict], n: int) -> None:
+    output_path.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in results))
+    logger.info(f"Checkpoint: {n} answers written to {output_path}")
 
 
 async def main(input_path: Path, output_path: Path) -> None:
@@ -96,29 +101,34 @@ async def main(input_path: Path, output_path: Path) -> None:
     output_path.write_text("")
 
     results: list[dict] = []
-    t0 = time.monotonic()
-    for i, pair in enumerate(pairs):
+    seen = 0
+
+    async def process_pair(pair: dict) -> dict | None:
+        nonlocal results, seen
         text = article_texts.get(pair["article_id"], "")
         if not text:
             logger.warning(f"[{pair['title']}] article_id={pair['article_id']} not found, skipping")
-            continue
-
-        answer = await generate_answer(semaphore, pair["question"], text, pair["title"])
+            return None
+        answer = await generate_answer(http, semaphore, pair["question"], text, pair["title"])
         if answer is None:
-            continue
-
-        result = {
-            **pair,
-            "model_answer": answer,
-            "model": OLLAMA_MODEL,
-        }
+            return None
+        result = {**pair, "model_answer": answer, "model": OLLAMA_MODEL}
         results.append(result)
+        seen += 1
+        if seen % 50 == 0:
+            checkpoint(output_path, results, seen)
+        return result
 
-        if (i + 1) % 10 == 0:
-            logger.info(f"Progress: {i+1}/{len(pairs)} ({time.monotonic()-t0:.1f}s)")
+    t0 = time.monotonic()
+    async with httpx.AsyncClient(timeout=300) as http:
+        tasks = [process_pair(p) for p in pairs]
+        raw = await asyncio.gather(*tasks, return_exceptions=True)
+        errors = [r for r in raw if isinstance(r, Exception)]
+        for e in errors:
+            logger.error(f"Task failed: {e}")
 
-    output_path.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in results))
-    logger.info(f"Done. {len(results)} answers written to {output_path} in {time.monotonic()-t0:.1f}s")
+    checkpoint(output_path, results, len(pairs))
+    logger.info(f"Done. {len(results)}/{len(pairs)} answers ({len(errors)} errors) in {time.monotonic()-t0:.1f}s")
 
 
 if __name__ == "__main__":
