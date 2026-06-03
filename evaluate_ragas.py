@@ -15,10 +15,11 @@ import sys
 import time
 from pathlib import Path
 
-import httpx
 from loguru import logger
 from openai import AsyncOpenAI
 from pydantic import BaseModel
+
+from utils.wikipedia_loader import load_articles_by_id
 
 DEEPSEEK_MODEL = "deepseek-v4-flash"
 BASE_URL = "https://api.deepseek.com"
@@ -26,11 +27,6 @@ MAX_CONCURRENT = 50
 REF_CLAIMS_CACHE_FILE = Path("qa_reference_claims.jsonl")
 ARTICLE_CLAIMS_CACHE_FILE = Path("qa_article_claims.jsonl")
 LOG_DIR = Path("logs")
-
-HF_ROWS_URL = "https://datasets-server.huggingface.co/rows"
-HF_DATASET = "wikimedia/wikipedia"
-HF_CONFIG = "20231101.en"
-HF_MAX_PER_REQUEST = 100
 
 LOG_DIR.mkdir(exist_ok=True)
 logger.remove()
@@ -143,25 +139,6 @@ def save_article_claims_cache(cache: dict[int, ArticleClaims]) -> None:
         for aid, ac in cache.items()
     ]
     ARTICLE_CLAIMS_CACHE_FILE.write_text("\n".join(lines))
-
-
-async def fetch_articles_by_id(article_ids: set[int]) -> dict[int, str]:
-    texts: dict[int, str] = {}
-    async with httpx.AsyncClient(timeout=30) as http:
-        for offset in range(0, max(article_ids) + 1, HF_MAX_PER_REQUEST):
-            ids_in_range = {i for i in article_ids if offset <= i < offset + HF_MAX_PER_REQUEST}
-            if not ids_in_range:
-                continue
-            resp = await http.get(
-                HF_ROWS_URL,
-                params={"dataset": HF_DATASET, "config": HF_CONFIG, "split": "train", "offset": offset, "length": HF_MAX_PER_REQUEST},
-            )
-            resp.raise_for_status()
-            for r in resp.json()["rows"]:
-                if r["row_idx"] in article_ids:
-                    texts[r["row_idx"]] = r["row"]["text"]
-            logger.info(f"Fetched {len(texts)}/{len(article_ids)} articles")
-    return texts
 
 
 async def decompose_reference(
@@ -378,7 +355,7 @@ async def main(
         article_ids_needed = {p["article_id"] for p in art_pairs if p["article_id"] not in art_cache}
         if article_ids_needed:
             logger.info(f"Fetching {len(article_ids_needed)} articles for claim decomposition...")
-            article_texts = await fetch_articles_by_id(article_ids_needed)
+            article_texts = load_articles_by_id(article_ids_needed)
 
             missing_articles = [
                 (aid, text) for aid, text in article_texts.items()

@@ -12,6 +12,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).parent.parent
 
 EXPECTED_SCHEMAS: dict[str, set[str]] = {
+    "wikipedia_en.jsonl": {"article_id", "id", "url", "title", "text"},
     "qa_pairs.jsonl": {"difficulty", "question", "answer", "title", "source_text_length", "article_id"},
     "qa_pairs_evaluated.jsonl": {"difficulty", "question", "answer", "title", "source_text_length", "article_id", "faithfulness", "completeness", "clarity", "judge_reasoning", "eval_time_s"},
     "qa_pairs_gemma.jsonl": {"difficulty", "question", "answer", "title", "source_text_length", "article_id", "model_answer", "model"},
@@ -25,7 +26,7 @@ def check_file(filename: str, expected_keys: set[str]) -> list[str]:
         return [f"SKIP: {filename} not found"]
 
     errors: list[str] = []
-    lines = [l for l in path.read_text().strip().splitlines() if l.strip()]
+    lines = [l for l in path.read_text().split("\n") if l.strip()]
     if not lines:
         return [f"{filename}: file is empty"]
 
@@ -71,7 +72,7 @@ def run_checks() -> int:
             for e in errors:
                 print(f"    - {e}")
         else:
-            lines = len([l for l in path.read_text().strip().splitlines() if l.strip()])
+            lines = len([l for l in path.read_text().split("\n") if l.strip()])
             print(f"  {filename}: PASS ({lines} records)")
 
     if not found_any:

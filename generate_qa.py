@@ -8,10 +8,11 @@ import time
 from enum import Enum
 from pathlib import Path
 
-import httpx
 from loguru import logger
 from openai import AsyncOpenAI
 from pydantic import BaseModel
+
+from utils.wikipedia_loader import load_articles
 
 # --- Config ---
 DEEPSEEK_MODEL = "deepseek-v4-flash"
@@ -79,34 +80,6 @@ Article Text:
 {text}
 
 Generate 15 question-answer pairs (5 easy, 5 medium, 5 hard) based on this article. Respond in JSON."""
-
-
-# --- HF dataset fetching ---
-HF_ROWS_URL = "https://datasets-server.huggingface.co/rows"
-HF_DATASET = "wikimedia/wikipedia"
-HF_CONFIG = "20231101.en"
-HF_MAX_PER_REQUEST = 100
-
-
-async def fetch_wikipedia_articles(n: int) -> list[dict]:
-    """Fetch n articles from Wikipedia via HF datasets server API."""
-    articles: list[dict] = []
-    t0 = time.monotonic()
-    async with httpx.AsyncClient(timeout=30) as http:
-        for offset in range(0, n, HF_MAX_PER_REQUEST):
-            length = min(HF_MAX_PER_REQUEST, n - offset)
-            logger.debug(f"HF API request: offset={offset}, length={length}")
-            resp = await http.get(
-                HF_ROWS_URL,
-                params={"dataset": HF_DATASET, "config": HF_CONFIG, "split": "train", "offset": offset, "length": length},
-            )
-            resp.raise_for_status()
-            rows = resp.json()["rows"]
-            for r in rows:
-                row = r["row"]
-                articles.append({"article_id": r["row_idx"], "title": row["title"], "text": row["text"]})
-            logger.info(f"Fetched {len(articles)}/{n} articles ({time.monotonic()-t0:.1f}s)")
-    return articles
 
 
 # --- DeepSeek QA generation ---
@@ -241,7 +214,7 @@ async def main() -> None:
     n_topics = int(sys.argv[1]) if len(sys.argv) > 1 else 1
     logger.info(f"Starting: n_topics={n_topics}, model={DEEPSEEK_MODEL}, concurrency={MAX_CONCURRENT}")
 
-    articles = await fetch_wikipedia_articles(n_topics)
+    articles = load_articles(n_topics)
     logger.info(f"Loaded {len(articles)} articles")
 
     # Resume support: skip already-processed articles

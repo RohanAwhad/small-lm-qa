@@ -11,6 +11,8 @@ import httpx
 from loguru import logger
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
+from utils.wikipedia_loader import load_articles_by_id
+
 OLLAMA_URL = "http://localhost:11434/api/chat"
 OLLAMA_MODEL = "gemma3:270m"
 MAX_CONCURRENT = 4
@@ -22,30 +24,6 @@ logger.add(sys.stderr, level="INFO", format="{time:HH:mm:ss} | {level:<7} | {mes
 logger.add(LOG_DIR / "generate_gemma.log", level="DEBUG", rotation="10 MB")
 
 SYSTEM_PROMPT = "You are a helpful assistant. Answer the question based only on the provided article text."
-
-HF_ROWS_URL = "https://datasets-server.huggingface.co/rows"
-HF_DATASET = "wikimedia/wikipedia"
-HF_CONFIG = "20231101.en"
-HF_MAX_PER_REQUEST = 100
-
-
-async def fetch_articles_by_id(article_ids: set[int]) -> dict[int, str]:
-    texts: dict[int, str] = {}
-    async with httpx.AsyncClient(timeout=30) as http:
-        for offset in range(0, max(article_ids) + 1, HF_MAX_PER_REQUEST):
-            ids_in_range = {i for i in article_ids if offset <= i < offset + HF_MAX_PER_REQUEST}
-            if not ids_in_range:
-                continue
-            resp = await http.get(
-                HF_ROWS_URL,
-                params={"dataset": HF_DATASET, "config": HF_CONFIG, "split": "train", "offset": offset, "length": HF_MAX_PER_REQUEST},
-            )
-            resp.raise_for_status()
-            for r in resp.json()["rows"]:
-                if r["row_idx"] in article_ids:
-                    texts[r["row_idx"]] = r["row"]["text"]
-            logger.info(f"Fetched {len(texts)}/{len(article_ids)} articles")
-    return texts
 
 
 def _should_retry(exc: BaseException) -> bool:
@@ -110,7 +88,7 @@ async def main(input_path: Path, output_path: Path) -> None:
 
     article_ids = {p["article_id"] for p in pairs}
     logger.info(f"Fetching {len(article_ids)} unique articles...")
-    article_texts = await fetch_articles_by_id(article_ids)
+    article_texts = load_articles_by_id(article_ids)
     logger.info(f"Fetched {len(article_texts)} article texts")
 
     semaphore = asyncio.Semaphore(MAX_CONCURRENT)

@@ -12,10 +12,11 @@ import sys
 import time
 from pathlib import Path
 
-import httpx
 from loguru import logger
 from openai import AsyncOpenAI
 from pydantic import BaseModel
+
+from utils.wikipedia_loader import load_articles_by_id
 
 DEEPSEEK_MODEL = "deepseek-v4-flash"
 BASE_URL = "https://api.deepseek.com"
@@ -28,11 +29,6 @@ logger.remove()
 log_level = os.environ.get("LOGGING_LEVEL", "DEBUG").upper()
 logger.add(sys.stderr, level="INFO", format="{time:HH:mm:ss} | {level:<7} | {message}")
 logger.add(LOG_DIR / "verify_golden.log", level=log_level, format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level:<7} | {message}")
-
-HF_ROWS_URL = "https://datasets-server.huggingface.co/rows"
-HF_DATASET = "wikimedia/wikipedia"
-HF_CONFIG = "20231101.en"
-HF_MAX_PER_REQUEST = 100
 
 
 class Verdict(BaseModel):
@@ -64,25 +60,6 @@ def load_json_or_jsonl(path: Path) -> list[dict]:
     if raw.startswith("["):
         return json.loads(raw)
     return [json.loads(l) for l in raw.splitlines() if l.strip()]
-
-
-async def fetch_articles_by_id(article_ids: set[int]) -> dict[int, str]:
-    texts: dict[int, str] = {}
-    async with httpx.AsyncClient(timeout=30) as http:
-        for offset in range(0, max(article_ids) + 1, HF_MAX_PER_REQUEST):
-            ids_in_range = {i for i in article_ids if offset <= i < offset + HF_MAX_PER_REQUEST}
-            if not ids_in_range:
-                continue
-            resp = await http.get(
-                HF_ROWS_URL,
-                params={"dataset": HF_DATASET, "config": HF_CONFIG, "split": "train", "offset": offset, "length": HF_MAX_PER_REQUEST},
-            )
-            resp.raise_for_status()
-            for r in resp.json()["rows"]:
-                if r["row_idx"] in article_ids:
-                    texts[r["row_idx"]] = r["row"]["text"]
-            logger.info(f"Fetched {len(texts)}/{len(article_ids)} articles")
-    return texts
 
 
 async def single_verdict(
@@ -159,7 +136,7 @@ async def main(input_path: Path, output_path: Path) -> None:
 
     article_ids = {p["article_id"] for p in pairs}
     logger.info(f"Fetching {len(article_ids)} unique articles...")
-    article_texts = await fetch_articles_by_id(article_ids)
+    article_texts = load_articles_by_id(article_ids)
     logger.info(f"Fetched {len(article_texts)} article texts")
 
     client = make_client()
