@@ -90,7 +90,8 @@ def main():
 
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_ID,
-        torch_dtype=torch.bfloat16,
+        torch_dtype=torch.float32,
+        attn_implementation="eager",
         device_map="auto",
     )
     print(f"Model params: {sum(p.numel() for p in model.parameters()):,}")
@@ -105,7 +106,8 @@ def main():
         logging_steps=LOGGING_STEPS,
         save_steps=SAVE_STEPS,
         save_total_limit=3,
-        bf16=True,
+        bf16=False,
+        fp16=False,
         optim="adamw_torch",
         lr_scheduler_type="cosine",
         warmup_steps=10,
