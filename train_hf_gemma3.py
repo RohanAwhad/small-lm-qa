@@ -16,8 +16,8 @@ MODEL_ID = "unsloth/gemma-3-270m-it"
 TRAIN_DATA = "qa_train.json"
 MAX_SEQ_LEN = 4096
 OUTPUT_DIR = "model_weights/gemma3-270m/hf_ckpts"
-BATCH_SIZE = 1
-GRAD_ACCUM_STEPS = 16
+BATCH_SIZE = 4
+GRAD_ACCUM_STEPS = 4
 LR = 1e-5
 NUM_EPOCHS = 1
 MAX_STEPS = 10  # set to -1 for full epoch
@@ -90,7 +90,7 @@ def main():
 
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_ID,
-        torch_dtype=torch.float32,
+        torch_dtype=torch.bfloat16,
         attn_implementation="eager",
         device_map="auto",
     )
@@ -106,8 +106,8 @@ def main():
         logging_steps=LOGGING_STEPS,
         save_steps=SAVE_STEPS,
         save_total_limit=3,
-        bf16=False,
-        fp16=False,
+        bf16=True,
+        max_grad_norm=1.0,
         optim="adamw_torch",
         lr_scheduler_type="cosine",
         warmup_steps=10,
