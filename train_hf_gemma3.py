@@ -20,7 +20,7 @@ BATCH_SIZE = 4
 GRAD_ACCUM_STEPS = 16
 LR = 1e-5
 NUM_EPOCHS = 1
-MAX_STEPS = 10  # set to -1 for full epoch
+MAX_STEPS = -1  # full epoch
 LOGGING_STEPS = 1
 SAVE_STEPS = 50
 
