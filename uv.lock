@@ -2044,6 +2044,7 @@ dependencies = [
     { name = "openai" },
     { name = "ragas" },
     { name = "sentence-transformers" },
+    { name = "tenacity" },
 ]
 
 [package.metadata]
@@ -2054,6 +2055,7 @@ requires-dist = [
     { name = "openai", specifier = ">=2.40.0" },
     { name = "ragas", specifier = ">=0.4.3" },
     { name = "sentence-transformers", specifier = ">=5.5.1" },
+    { name = "tenacity", specifier = ">=9.1.4" },
 ]
 
 [[package]]
