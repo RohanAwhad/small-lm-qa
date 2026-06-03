@@ -2045,6 +2045,7 @@ dependencies = [
     { name = "ragas" },
     { name = "sentence-transformers" },
     { name = "tenacity" },
+    { name = "tinygrad" },
 ]
 
 [package.metadata]
@@ -2056,6 +2057,7 @@ requires-dist = [
     { name = "ragas", specifier = ">=0.4.3" },
     { name = "sentence-transformers", specifier = ">=5.5.1" },
     { name = "tenacity", specifier = ">=9.1.4" },
+    { name = "tinygrad", specifier = ">=0.13.0" },
 ]
 
 [[package]]
@@ -2531,6 +2533,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/96/d9/dfd086aa2d918c563a140720e0ce296cada1634efd2783d5cf51e05f984e/tiktoken-0.13.0-cp314-cp314t-musllinux_1_2_aarch64.whl", hash = "sha256:6644c9c2b5cf3916f5a3641d7d12fdb3f006a7b3d9ff6acdaec44e29ab1ff91e", size = 1181863, upload-time = "2026-05-15T04:51:15.025Z" },
     { url = "https://files.pythonhosted.org/packages/2f/68/a18b4f307086954fdae32714cb4f85562e34f9d34ab206e61f1816aa6018/tiktoken-0.13.0-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:5cb65b60b9408563676d874a3a4ee573370066f0dc4e29d84e82e989c6517424", size = 1239218, upload-time = "2026-05-15T04:51:16.103Z" },
     { url = "https://files.pythonhosted.org/packages/16/5b/f2aa703a4fc5d2dff73460a7d46cc2f3f44aa0f3dd8eeb20d2a0ecf68862/tiktoken-0.13.0-cp314-cp314t-win_amd64.whl", hash = "sha256:85b78cc3a2c3d48723ca751fa981f1fedccd54194ca0471b957364353a898b07", size = 918110, upload-time = "2026-05-15T04:51:17.237Z" },
+]
+
+[[package]]
+name = "tinygrad"
+version = "0.13.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/29/30/069aef268ec5100d6d1dcc97dd1ac4793ff25e85ab71397aa9eef039f8c5/tinygrad-0.13.0.tar.gz", hash = "sha256:c12c428edaaa5c1915ff76f4fc6f6ded9b82f19bea6ab6bcc469bb7dfe6fcf4a", size = 2440369, upload-time = "2026-05-22T20:13:40.219Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/df/11/9ed320292a5fbfd8a2160b9a8f585e1a2f92a67cf34061c6104f5b2b0114/tinygrad-0.13.0-py3-none-any.whl", hash = "sha256:1aad37a742ac5f0bd26d811b9b799fbb08088eaa2e7279ff53b19b8c934a9f1c", size = 2529246, upload-time = "2026-05-22T20:13:38.222Z" },
 ]
 
 [[package]]

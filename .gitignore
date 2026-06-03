@@ -2,3 +2,5 @@
 __pycache__/
 *.jsonl
 logs/
+model_weights/
+play.py

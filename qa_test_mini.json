@@ -1,0 +1,82 @@
+[
+  {
+    "difficulty": "medium",
+    "question": "Describe the 'libelli portatiles' (portable books) produced by the Aldine Press.",
+    "answer": "Starting in 1505, Manutius produced small octavo books called 'enchiridion' (handbooks), similar to modern paperbacks. These 'editio minor' editions contained plain texts without commentary, printed in a cursive typeface, and were designed for portability and ease of reading, allowing individuals to carry books with them.",
+    "title": "Aldine Press",
+    "source_text_length": 13136,
+    "article_id": 502
+  },
+  {
+    "difficulty": "medium",
+    "question": "How did Anaximenes attempt to discredit Theopompus?",
+    "answer": "Anaximenes sought to discredit Theopompus with a libelous parody called Trikaranos, which he published in Theopompus' style and under his name, attacking Athens, Sparta, and Thebes. As Pausanias notes, Anaximenes imitated Theopompus' style perfectly, and the book caused hatred of Theopompus throughout Greece.",
+    "title": "Anaximenes of Lampsacus",
+    "source_text_length": 5597,
+    "article_id": 612
+  },
+  {
+    "difficulty": "hard",
+    "question": "Compare the catalytic activity of abzymes to natural enzymes and discuss possible ways to improve abzyme activity based on the article.",
+    "answer": "Natural enzymes are highly efficient catalysts, while abzymes display only weak, modest catalytic activity. The article suggests that factors beyond the binding site, particularly protein dynamics, may contribute to this low activity. Some abzymes have been engineered to use metal ions and other cofactors to improve their catalytic activity. Additionally, raising antibodies against better transition-state analogs or optimizing the antibody structure could potentially enhance activity.",
+    "title": "Abzyme",
+    "source_text_length": 3586,
+    "article_id": 701
+  },
+  {
+    "difficulty": "hard",
+    "question": "Describe the different organizations and societies that use the acronym ASL, including those related to education and other social causes.",
+    "answer": "Educational organizations using ASL include The American School in London, Appalachian School of Law, and Art Students' League of Philadelphia. Other social and organizational uses include the Anti-Saloon League (temperance movement), Artists' Suffrage League (UK), Autobacs Sportscar Laboratory (Japan), Ansar al-Sharia in Libya (militant group), and Animelo Summer Live (Japanese music festival). Also, under 'Other uses' in Society, there is Advanced stop line (road marking). These span education, activism, automotive, and entertainment.",
+    "title": "ASL (disambiguation)",
+    "source_text_length": 2459,
+    "article_id": 762
+  },
+  {
+    "difficulty": "medium",
+    "question": "How does the PAL D (delay) system correct phase errors in color reproduction?",
+    "answer": "The PAL D system corrects phase errors by reversing the phase of the signal on each successive line and averaging the results over pairs of lines using a 1H duration delay line. Phase shift errors between successive lines are canceled out, and the wanted signal amplitude is increased when the two in-phase signals are recombined.",
+    "title": "Analog television",
+    "source_text_length": 43358,
+    "article_id": 965
+  },
+  {
+    "difficulty": "medium",
+    "question": "Who was Tom Wills and what was his role in the early development of Australian rules football?",
+    "answer": "Tom Wills was a captain of the Victoria cricket team who wrote a letter in 1858 calling for the formation of a football club with a code of laws to keep cricketers fit during winter. He had played rugby football at Rugby School in England. Wills was instrumental in organizing early matches, captained a loosely organized Melbourne side, and along with others drafted the first ten rules of the Melbourne Football Club in 1859, which became the foundation of Australian football. He is considered a key figure in the sport's origins.",
+    "title": "Australian rules football",
+    "source_text_length": 41937,
+    "article_id": 972
+  },
+  {
+    "difficulty": "medium",
+    "question": "Describe the publication history of the Amara-Kosha in the 19th century, listing the key editions and translations.",
+    "answer": "In 1798, the first chapter was printed in Rome in Tamil script. In 1808, Henry Thomas Colebrooke published the entire work with English notes and an index at Serampore. The Sanskrit text was printed in Calcutta in 1831. A French translation by ALA Loiseleur-Deslongchamps appeared in Paris in 1839.",
+    "title": "Amarasimha",
+    "source_text_length": 1588,
+    "article_id": 565
+  },
+  {
+    "difficulty": "medium",
+    "question": "What does the article say about the castle of Azincourt?",
+    "answer": "The battle was named after a nearby castle called Azincourt, which has since disappeared. The settlement adopted the name in the 17th century.",
+    "title": "Azincourt",
+    "source_text_length": 3316,
+    "article_id": 186
+  },
+  {
+    "difficulty": "medium",
+    "question": "What are the conditions for a subset of an R-algebra A to be a subalgebra?",
+    "answer": "A subalgebra of an R-algebra A is a subset of A that is both a subring and a submodule of A. It must be closed under addition, ring multiplication, scalar multiplication, and it must contain the identity element of A.",
+    "title": "Associative algebra",
+    "source_text_length": 20409,
+    "article_id": 821
+  },
+  {
+    "difficulty": "easy",
+    "question": "Who proved Fermat's Last Theorem using algebraic geometry?",
+    "answer": "Wiles proved Fermat's Last Theorem using algebraic geometry, specifically through the use of scheme theory and modular forms.",
+    "title": "Algebraic geometry",
+    "source_text_length": 38397,
+    "article_id": 759
+  }
+]

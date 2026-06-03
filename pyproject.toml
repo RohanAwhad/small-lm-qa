@@ -12,4 +12,5 @@ dependencies = [
     "ragas>=0.4.3",
     "sentence-transformers>=5.5.1",
     "tenacity>=9.1.4",
+    "tinygrad>=0.13.0",
 ]
