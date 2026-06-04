@@ -14,7 +14,7 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponen
 from utils.wikipedia_loader import load_articles_by_id
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
-OLLAMA_MODEL = "gemma3:270m"
+DEFAULT_OLLAMA_MODEL = "gemma3:270m"
 MAX_CONCURRENT = 4
 LOG_DIR = Path("logs")
 
@@ -40,11 +40,11 @@ def _should_retry(exc: BaseException) -> bool:
     retry=retry_if_exception(_should_retry),
     reraise=True,
 )
-async def _call_ollama(http: httpx.AsyncClient, title: str, question: str, context: str) -> str:
+async def _call_ollama(http: httpx.AsyncClient, title: str, question: str, context: str, model: str) -> str:
     resp = await http.post(
         OLLAMA_URL,
         json={
-            "model": OLLAMA_MODEL,
+            "model": model,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": f"Article:\n{context}\n\nQuestion: {question}\n\nAnswer:"},
@@ -63,12 +63,13 @@ async def generate_answer(
     question: str,
     context: str,
     title: str,
+    model: str,
 ) -> str | None:
     async with semaphore:
         logger.debug(f"[{title}] generating answer for Q: {question[:60]}...")
         t0 = time.monotonic()
         try:
-            answer = await _call_ollama(http, title, question, context)
+            answer = await _call_ollama(http, title, question, context, model)
         except Exception as e:
             elapsed = time.monotonic() - t0
             logger.error(f"[{title}] failed after retries: {type(e).__name__}: {e} ({elapsed:.1f}s)")
@@ -78,7 +79,7 @@ async def generate_answer(
         return answer
 
 
-async def main(input_path: Path, output_path: Path) -> None:
+async def main(input_path: Path, output_path: Path, model: str) -> None:
     raw = input_path.read_text().strip()
     if raw.startswith("["):
         pairs = json.loads(raw)
@@ -98,10 +99,10 @@ async def main(input_path: Path, output_path: Path) -> None:
         if not text:
             logger.warning(f"[{pair['title']}] article_id={pair['article_id']} not found, skipping")
             return None
-        answer = await generate_answer(http, semaphore, pair["question"], text, pair["title"])
+        answer = await generate_answer(http, semaphore, pair["question"], text, pair["title"], model)
         if answer is None:
             return None
-        return {**pair, "model_answer": answer, "model": OLLAMA_MODEL}
+        return {**pair, "model_answer": answer, "model": model}
 
     t0 = time.monotonic()
     written = 0
@@ -125,8 +126,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate Gemma3 answers for QA pairs")
     parser.add_argument("input", nargs="?", default="qa_pairs.jsonl", help="Input JSON/JSONL file (default: qa_pairs.jsonl)")
     parser.add_argument("-o", "--output", default=None, help="Output JSONL file (default: <input_stem>_gemma.jsonl)")
+    parser.add_argument("-m", "--model", default=DEFAULT_OLLAMA_MODEL, help=f"Ollama model ID (default: {DEFAULT_OLLAMA_MODEL})")
     args = parser.parse_args()
 
     in_path = Path(args.input)
     out_path = Path(args.output) if args.output else in_path.with_stem(in_path.stem + "_gemma").with_suffix(".jsonl")
-    asyncio.run(main(in_path, out_path))
+    asyncio.run(main(in_path, out_path, args.model))
