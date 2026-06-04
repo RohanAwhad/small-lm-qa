@@ -10,6 +10,7 @@
 - `gemma3.py` — Gemma3 270M model definition in tinygrad (config, RoPE, attention, MLP, weight loading)
 - `train_gemma3.py` — fine-tune Gemma3 270M on QA pairs via tinygrad (gradient accumulation, checkpointing)
 - `train_hf_gemma3.py` — fine-tune Gemma3 270M via HF Transformers (`unsloth/gemma-3-270m-it`)
+- `validate_multi_qa.py` — RAGAS-style validation for multi-article QA: faithfulness (answer claims vs source articles) + context relevance (exploration log focus). Deterministic sentence splitting, resume support.
 - `evaluate_ragas.py` — **primary eval**: RAGAS-style claim decomposition → P/R/F1 per pair. Dual mode: reference-based (uses `model_answer`) or article-based (against Wikipedia text). Has resume support.
 - `verify_golden.py` — 4-vote LLM judge against Wikipedia article; unanimous = correct. No resume support (clears output on rerun).
 - `generate_gemma_answers.py` — re-answers questions using Gemma3 270M via local Ollama; streaming output + tenacity retry
@@ -33,6 +34,9 @@ uv run python generate_gemma_answers.py [input.jsonl] [-o output.jsonl]
 
 # RAGAS eval: claim-based P/R/F1 (has resume — skips already-evaluated pairs)
 uv run python evaluate_ragas.py [input.jsonl] --reference qa_pairs.jsonl [-o output.jsonl]
+
+# Validate multi-article QA: faithfulness + context relevance (has resume)
+uv run python validate_multi_qa.py [input.jsonl] [-o output.jsonl]
 
 # 4-vote golden verification against Wikipedia (no resume — overwrites output)
 uv run python verify_golden.py [input.jsonl] [-o output.jsonl]
