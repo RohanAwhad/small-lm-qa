@@ -45,8 +45,9 @@ N_ARTICLES = 10
 MAX_CHUNK_WORDS = 1000
 EMBEDDING_MODEL = "all-mpnet-base-v2"
 SEARCH_TOP_K = 5
-MAX_AGENT_ITERATIONS = 15
-MAX_TOOL_CALLS = 8
+MAX_AGENT_ITERATIONS = 125
+MIN_TOOL_CALLS = 15
+MAX_TOOL_CALLS = 100
 TFIDF_WEIGHT = 0.4
 VEC_WEIGHT = 0.6
 
@@ -318,29 +319,108 @@ Extract entities, keywords, and themes. Respond in json."""
 
 
 EXPLORER_SYSTEM = """\
-You are a research task proposer exploring a corpus of Wikipedia articles to design \
-a challenging, multi-article open-ended research question.
+You are a research task proposer conducting a systematic, multi-stage exploration \
+of a corpus of Wikipedia articles. Your mission is to discover deep, non-obvious \
+connections across multiple articles and design a challenging multi-article research \
+question with rich supporting evidence.
 
-Your goal: find connections across multiple articles and propose a research question \
-that requires synthesizing information from at least 2-3 different articles.
+## Tools
 
-You have access to two tools:
-- search(query): Search the corpus for relevant passages (returns top-5 chunks)
-- read_article(article_id, offset, limit): Read a section of a specific article
+- search(query): Hybrid search (TF-IDF + semantic) over all article chunks. Returns \
+top-5 matching passages with article ID, title, and text preview. Use VARIED queries: \
+thematic concepts, entity names, time periods, geographic terms, causal phrases, \
+domain-specific vocabulary, and unexpected juxtapositions.
+- read_article(article_id, offset, limit): Read raw article text starting at a \
+character offset. Use different offsets to explore middle and later sections — \
+not just the opening. Interesting content (analysis, controversies, legacy, \
+influence) is often deep in the article.
+
+## Exploration Protocol (3 stages)
+
+### Stage 1 — Breadth-First Survey (~5 tool calls)
+Cast a wide net to understand what the corpus contains and where the richest \
+content lives.
 
 Strategy:
-1. Start by searching for themes that might connect multiple articles
-2. Read relevant sections to understand the content deeply
-3. Look for cross-cutting themes, contrasts, causal connections, or comparative angles
-4. When you have found a good multi-article angle, stop exploring
+- Search for BROAD themes from the seed keywords (e.g., "political philosophy", \
+"cultural legacy", "19th century reform", "Greek influence on Western thought")
+- Split searches by ANGLE, not just topic — try at least 3 different angles:
+  * Thematic (shared concepts, movements, ideologies)
+  * Temporal (shared time periods, centuries, eras)
+  * Geographic (shared regions, countries, cities)
+  * Relational (influence, opposition, parallel development)
+- Read the opening ~2000 chars of 2-3 articles that appear promising
+- After each tool call, write a brief reflection: what did you learn? What \
+looks promising? What angles remain unexplored?
 
-After exploring, write a summary of:
-- What connections you found across articles
-- Which articles are most relevant (by ID and title)
-- What research question you would propose
-- Key facts and details that should appear in a reference answer
+Deliverable: By the end of Stage 1, identify:
+- The 3-5 most content-rich articles
+- 2-3 candidate thematic threads that might connect multiple articles
+- Gaps: which articles haven't appeared in searches yet? Why?
+- Surprises: anything unexpected or contradictory?
 
-Keep exploration focused — aim for 4-8 tool calls total."""
+### Stage 2 — Targeted Deep Dives (~5 tool calls)
+Go deep into the most promising articles and thematic threads.
+
+Strategy:
+- Pick 2-3 articles and read them at MULTIPLE offsets (beginning, middle, end) \
+to get full coverage — do not settle for just the introduction
+- Search for SPECIFIC entities, events, or claims found in Stage 1 to see if \
+they appear in other articles (cross-references)
+- Look for: specific facts, dates, names, quotes, arguments, turning points, \
+causal claims, and nuanced positions
+- For each article you deep-dive into, note: what is unique to this article? \
+What overlaps with others?
+
+Deliverable: By the end of Stage 2, you should have:
+- Detailed notes on 3-4 articles with specific evidence (facts, dates, quotes)
+- At least 2 confirmed cross-article connections with cited evidence from both sides
+- A working hypothesis for a research question
+
+### Stage 3 — Cross-Referencing & Refinement (~5 tool calls)
+Stress-test your hypothesis and gather final evidence.
+
+Strategy:
+- Search for the INTERSECTION of your candidate articles — queries that combine \
+concepts from different articles (e.g., "authority and virtue", "war and philosophy")
+- Try UNEXPECTED juxtapositions: take a key term from one article and search for it \
+in the context of another article's domain
+- Read any articles you haven't explored yet — they may have hidden connections
+- Verify specific claims by re-reading the relevant passages
+- Gather precise details (exact dates, full names, specific arguments) that would \
+make a reference answer authoritative
+
+Deliverable: Confirmed connections, counter-evidence (if any), and all the raw \
+material needed for a research question + reference answer.
+
+## Guidelines
+
+- Use at least 15 tool calls total. Do not stop early.
+- VARY every search query — never repeat similar queries. Each search should target \
+a different angle, concept, or cross-article bridge.
+- Read articles at different offsets — use offset=0, offset=5000, offset=15000, etc.
+- Connect at least 3-4 articles, not just 2.
+- Prioritize SURPRISING and NON-OBVIOUS connections over surface-level topic overlap.
+- After EVERY tool call, write 1-3 sentences reflecting on what you learned and \
+what to explore next. This running commentary is your exploration log.
+- Reserve your last response for a thorough written summary — do not let data \
+gathering consume all your effort.
+
+## Final Summary (write this when done exploring)
+
+When you have gathered enough evidence (after all 3 stages), write a detailed \
+exploration report:
+
+1. **Cross-article connections**: Every connection discovered, with specific \
+evidence cited from each article (article ID, key facts/quotes).
+2. **Articles used**: Which articles are central and why (by ID and title). \
+Which were explored but not relevant? Why?
+3. **Proposed research question**: The question itself, plus WHY it is interesting, \
+challenging, and requires multi-article synthesis.
+4. **Evidence inventory**: For each relevant article, list the key facts, dates, \
+names, arguments, and quotes that should appear in a reference answer.
+5. **Gaps and surprises**: What was unexpected? What connections were you hoping \
+to find but didn't? What would make this question even stronger with more articles?"""
 
 
 EXPLORER_USER = """\
@@ -565,7 +645,9 @@ async def agent_explore(
     total_tool_calls = 0
 
     for iteration in range(MAX_AGENT_ITERATIONS):
-        # After enough tool calls, drop tools to force a summary response
+        # Below min: always provide tools
+        # Between min and max: provide tools, let agent decide when to stop
+        # Above max: drop tools to force summary
         use_tools = total_tool_calls < MAX_TOOL_CALLS
 
         t0 = time.monotonic()
@@ -603,7 +685,7 @@ async def agent_explore(
                     "tool_call_id": tc.id,
                     "content": result,
                 })
-            # If we just crossed the threshold, nudge the agent to wrap up
+            # If we just crossed the max, nudge the agent to wrap up
             if total_tool_calls >= MAX_TOOL_CALLS:
                 messages.append({
                     "role": "user",
@@ -613,6 +695,18 @@ async def agent_explore(
                         "you found, relevant articles, and proposed research question."
                     ),
                 })
+        elif total_tool_calls < MIN_TOOL_CALLS:
+            # Agent tried to stop too early — push it to keep exploring
+            messages.append({
+                "role": "user",
+                "content": (
+                    f"You have only made {total_tool_calls} tool calls so far. "
+                    f"Keep exploring — you should make at least {MIN_TOOL_CALLS} total. "
+                    "Try different search queries, read deeper into articles you found "
+                    "interesting, look for less obvious cross-article connections, "
+                    "and explore articles you haven't looked at yet."
+                ),
+            })
         else:
             exploration_notes = msg.content or ""
             logger.info(
