@@ -91,7 +91,7 @@ def main():
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_ID,
         torch_dtype=torch.bfloat16,
-        attn_implementation="sdpa",
+        attn_implementation="eager",
         device_map="auto",
     )
     print(f"Model params: {sum(p.numel() for p in model.parameters()):,}")
@@ -114,7 +114,6 @@ def main():
         warmup_steps=100,
         report_to="none",
         dataloader_pin_memory=False,
-        dataloader_num_workers=4,
     )
 
     trainer = Trainer(
