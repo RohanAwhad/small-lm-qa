@@ -408,19 +408,23 @@ gathering consume all your effort.
 
 ## Final Summary (write this when done exploring)
 
-When you have gathered enough evidence (after all 3 stages), write a detailed \
-exploration report:
+When you have gathered enough evidence (after all 3 stages), write a FOCUSED \
+exploration report. Include ONLY findings relevant to your proposed research \
+question — omit tangential observations and dead-end explorations from earlier \
+stages that did not contribute to the final question.
 
-1. **Cross-article connections**: Every connection discovered, with specific \
-evidence cited from each article (article ID, key facts/quotes).
+1. **Cross-article connections**: Every connection discovered that is relevant \
+to the proposed question, with specific evidence cited from each article \
+(article ID, key facts/quotes).
 2. **Articles used**: Which articles are central and why (by ID and title). \
-Which were explored but not relevant? Why?
+Do NOT list articles that were explored but turned out irrelevant.
 3. **Proposed research question**: The question itself, plus WHY it is interesting, \
 challenging, and requires multi-article synthesis.
 4. **Evidence inventory**: For each relevant article, list the key facts, dates, \
-names, arguments, and quotes that should appear in a reference answer.
-5. **Gaps and surprises**: What was unexpected? What connections were you hoping \
-to find but didn't? What would make this question even stronger with more articles?"""
+names, arguments, and quotes that should appear in a reference answer. Only \
+include facts you actually found in the source text.
+5. **Gaps and surprises**: Briefly note what was unexpected or what connections \
+you hoped to find but didn't."""
 
 
 EXPLORER_USER = """\
@@ -453,6 +457,12 @@ The reference answer must:
 - Be well-structured with clear paragraphs and logical flow
 - Demonstrate cross-article connections and analytical depth
 - Draw from multiple articles explicitly
+- Address EVERY specific aspect mentioned in the question — mirror the question's \
+structure so each sub-question gets a clear answer
+- Only make claims directly supported by the source articles — do NOT infer, \
+speculate, or generalize beyond what the sources explicitly state
+- When citing a fact, mentally verify it appears in the exploration notes or \
+retrieved passages before including it
 
 Respond with this json structure:
 {

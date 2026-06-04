@@ -1,6 +1,6 @@
 """Validate multi-article QA pairs using RAGAS-style metrics.
 
-Two metrics (from RAGAS paper, arxiv 2309.15217):
+Three metrics (from RAGAS paper, arxiv 2309.15217):
 
   1. Faithfulness: Are claims in reference_answer inferable from source articles?
      - Decompose answer -> atomic statements (LLM call 1)
@@ -8,8 +8,14 @@ Two metrics (from RAGAS paper, arxiv 2309.15217):
      - Score = |supported| / |total statements|
 
   2. Context Relevance: Is the exploration context focused on the question?
-     - Given question + exploration_log, extract relevant sentences (LLM call 3)
+     - Split exploration_log into sentences (deterministic, regex-based)
+     - LLM identifies which sentence indices are relevant (LLM call 3)
      - Score = |relevant sentences| / |total sentences in context|
+
+  3. Answer Relevance: Does the answer address the question?
+     - Generate N questions from the answer without seeing original (LLM call 4)
+     - Embed generated questions + original question (sentence-transformers)
+     - Score = mean cosine similarity between generated and original
 
 Usage:
   uv run python validate_multi_qa.py [input.jsonl] [-o output.jsonl]
@@ -25,9 +31,11 @@ import time
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from loguru import logger
 from openai import AsyncOpenAI
 from pydantic import BaseModel
+from sentence_transformers import SentenceTransformer
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -41,6 +49,8 @@ DEEPSEEK_MODEL = "deepseek-v4-flash"
 BASE_URL = "https://api.deepseek.com"
 MAX_CONCURRENT = 10
 MAX_ARTICLE_CHARS = 40_000
+EMBEDDING_MODEL = "all-mpnet-base-v2"
+N_GENERATED_QUESTIONS = 3
 LOG_DIR = Path("logs")
 
 LOG_DIR.mkdir(exist_ok=True)
@@ -70,6 +80,11 @@ class FaithfulnessOutput(BaseModel):
 class ContextRelevanceOutput(BaseModel):
     reasoning: str = ""
     relevant_indices: list[int]
+
+
+class AnswerRelevanceOutput(BaseModel):
+    reasoning: str = ""
+    questions: list[str]
 
 
 # --- Prompts ---
@@ -121,6 +136,20 @@ Which sentence indices contain information needed to answer the question?
 Return ONLY the indices of relevant sentences.
 
 Respond in JSON: {{"reasoning": "...", "relevant_indices": [0, 3, 7, ...]}}"""
+
+
+ANSWER_REL_SYSTEM = """You generate questions that a given answer would be a good response to.
+Do NOT see or use the original question — generate questions purely from the answer content.
+Respond only in json format."""
+
+ANSWER_REL_USER = """Given this answer, generate {n} different questions that this answer
+would be a good, comprehensive response to. Each question should be an open-ended
+research question that captures a different angle of what the answer addresses.
+
+Answer:
+{answer}
+
+Respond in JSON: {{"reasoning": "...", "questions": ["question1", "question2", ...]}}"""
 
 
 # --- LLM ---
@@ -275,6 +304,59 @@ async def compute_context_relevance(
         }
 
 
+# --- Answer Relevance ---
+
+
+async def compute_answer_relevance(
+    client: AsyncOpenAI,
+    semaphore: asyncio.Semaphore,
+    question: str,
+    reference_answer: str,
+    embedder: SentenceTransformer,
+) -> dict[str, Any]:
+    """Answer relevance = mean cosine similarity of generated questions to original."""
+    async with semaphore:
+        t0 = time.monotonic()
+
+        raw = await call_llm_json(
+            client, ANSWER_REL_SYSTEM,
+            ANSWER_REL_USER.format(n=N_GENERATED_QUESTIONS, answer=reference_answer),
+        )
+        ar = AnswerRelevanceOutput.model_validate(raw)
+        generated = ar.questions
+
+        if not generated:
+            logger.warning("No questions generated from answer")
+            return {
+                "answer_relevance": 0.0, "generated_questions": [],
+                "similarities": [], "eval_time_s": round(time.monotonic() - t0, 1),
+            }
+
+        # Embed original + generated questions
+        all_texts = [question] + generated
+        embeddings = embedder.encode(all_texts, convert_to_numpy=True)
+        q_emb = embeddings[0:1]  # (1, dim)
+        gen_embs = embeddings[1:]  # (N, dim)
+
+        # Cosine similarities
+        from sklearn.metrics.pairwise import cosine_similarity as cos_sim
+
+        sims = cos_sim(q_emb, gen_embs)[0].tolist()  # list of N floats
+        score = float(np.mean(sims))
+        elapsed = time.monotonic() - t0
+
+        logger.info(
+            f"Answer relevance: {score:.3f} (sims={[f'{s:.3f}' for s in sims]}) "
+            f"in {elapsed:.1f}s"
+        )
+        return {
+            "answer_relevance": round(score, 4),
+            "generated_questions": generated,
+            "similarities": [round(s, 4) for s in sims],
+            "eval_time_s": round(elapsed, 1),
+        }
+
+
 # --- Main ---
 
 
@@ -304,6 +386,10 @@ async def main(input_path: Path, output_path: Path) -> None:
 
     client = make_client()
     semaphore = asyncio.Semaphore(MAX_CONCURRENT)
+
+    # Load embedding model once for answer relevance
+    logger.info(f"Loading embedding model: {EMBEDDING_MODEL}")
+    embedder = SentenceTransformer(EMBEDDING_MODEL)
 
     # Collect all article IDs needed
     all_article_ids: set[int] = set()
@@ -342,17 +428,22 @@ async def main(input_path: Path, output_path: Path) -> None:
 
         logger.info(f"[{i + 1}/{len(pending)}] {question[:80]}...")
 
-        # Run both metrics concurrently
+        # Run all 3 metrics concurrently
         faith_coro = compute_faithfulness(client, semaphore, reference_answer, pair_texts)
+        ar_coro = compute_answer_relevance(
+            client, semaphore, question, reference_answer, embedder,
+        )
         if exploration_log:
             cr_coro = compute_context_relevance(client, semaphore, question, exploration_log)
-            faith_result, cr_result = await asyncio.gather(faith_coro, cr_coro)
+            faith_result, ar_result, cr_result = await asyncio.gather(
+                faith_coro, ar_coro, cr_coro,
+            )
         else:
-            faith_result = await faith_coro
+            faith_result, ar_result = await asyncio.gather(faith_coro, ar_coro)
             cr_result: dict[str, Any] = {
                 "context_relevance": None,
                 "n_relevant_sentences": 0, "n_total_sentences": 0,
-                "relevant_sentences": [], "eval_time_s": 0,
+                "relevant_indices": [], "eval_time_s": 0,
             }
 
         result: dict[str, Any] = {
@@ -361,6 +452,7 @@ async def main(input_path: Path, output_path: Path) -> None:
             "reference_answer_chars": len(reference_answer),
             "exploration_log_chars": len(exploration_log),
             **{f"faith_{k}": v for k, v in faith_result.items()},
+            **{f"ar_{k}": v for k, v in ar_result.items()},
             **{f"ctx_{k}": v for k, v in cr_result.items()},
         }
         results.append(result)
@@ -375,11 +467,13 @@ async def main(input_path: Path, output_path: Path) -> None:
     elapsed = time.monotonic() - t0
     if results:
         avg_faith = sum(r["faith_faithfulness"] for r in results) / len(results)
+        avg_ar = sum(r["ar_answer_relevance"] for r in results) / len(results)
         ctx_scores = [r["ctx_context_relevance"] for r in results if r["ctx_context_relevance"] is not None]
         avg_ctx = sum(ctx_scores) / len(ctx_scores) if ctx_scores else 0.0
 
         logger.info(f"=== Summary ({len(results)} pairs, {elapsed:.1f}s) ===")
         logger.info(f"Avg Faithfulness:      {avg_faith:.3f}")
+        logger.info(f"Avg Answer Relevance:  {avg_ar:.3f}")
         logger.info(f"Avg Context Relevance: {avg_ctx:.3f}")
         logger.info(f"Output: {output_path}")
     else:
