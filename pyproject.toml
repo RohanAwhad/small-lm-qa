@@ -10,6 +10,7 @@ dependencies = [
     "loguru>=0.7.3",
     "openai>=2.40.0",
     "ragas>=0.4.3",
+    "scikit-learn>=1.9.0",
     "sentence-transformers>=5.5.1",
     "tenacity>=9.1.4",
     "tinygrad>=0.13.0",
