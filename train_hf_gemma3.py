@@ -18,11 +18,11 @@ MAX_SEQ_LEN = 4096
 OUTPUT_DIR = "model_weights/gemma3-270m/hf_ckpts"
 BATCH_SIZE = 4
 GRAD_ACCUM_STEPS = 16
-LR = 1e-5
-NUM_EPOCHS = 1
+LR = 1e-6
+NUM_EPOCHS = 10
 MAX_STEPS = -1  # full epoch
 LOGGING_STEPS = 1
-SAVE_STEPS = 50
+SAVE_STEPS = 224
 
 # ============================================================================
 # Data
@@ -91,7 +91,7 @@ def main():
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_ID,
         torch_dtype=torch.bfloat16,
-        attn_implementation="eager",
+        attn_implementation="sdpa",
         device_map="auto",
     )
     print(f"Model params: {sum(p.numel() for p in model.parameters()):,}")
@@ -111,9 +111,10 @@ def main():
         gradient_checkpointing=True,
         optim="adamw_torch",
         lr_scheduler_type="cosine",
-        warmup_steps=10,
+        warmup_steps=100,
         report_to="none",
         dataloader_pin_memory=False,
+        dataloader_num_workers=4,
     )
 
     trainer = Trainer(
