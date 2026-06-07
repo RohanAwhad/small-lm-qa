@@ -1,10 +1,26 @@
-"""POC: recursive chunking + BM25 retrieval + context relevance for 1 article."""
+"""Generate chunked QA pairs: recursive chunking + BM25 retrieval + answer regeneration.
 
+Pipeline per article:
+  1. Recursive-split article text into <=512 token chunks (Gemma3 tokenizer)
+  2. For each QA pair, BM25-retrieve top-3 chunks using golden answer
+  3. Regenerate answer from retrieved chunks (with reasoning_content)
+  4. Evaluate context precision + recall (RAGAS-style)
+  5. Write results to JSONL (one line per QA pair)
+
+Checkpointing: resumes by skipping article_ids already in output file.
+
+Usage:
+  uv run python generate_chunked_qa.py [N]       # process N articles (default: all)
+  uv run python generate_chunked_qa.py [N] [-o output.jsonl]
+"""
+
+import argparse
 import asyncio
 import json
 import os
-import re
+import sys
 import time
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
@@ -19,16 +35,29 @@ from tenacity import (
 )
 from transformers import AutoTokenizer
 
+from utils.wikipedia_loader import load_articles_by_id
+
 # --- Config ---
 
 TOKENIZER_ID = "unsloth/gemma-3-270m-it"
 MAX_CHUNK_TOKENS = 512
 TOP_K = 3
-ARTICLE_ID = 0
 DEEPSEEK_MODEL = "deepseek-v4-flash"
 BASE_URL = "https://api.deepseek.com"
+MAX_CONCURRENT = 10
+BATCH_SIZE = 20
+INPUT_FILE = Path("qa_pairs.jsonl")
+OUTPUT_FILE = Path("qa_pairs_chunked.jsonl")
 
 SEPARATORS = ["\n\n", "\n", ". ", ", ", " "]
+
+# --- Logging ---
+
+LOG_LEVEL = os.environ.get("LOGGING_LEVEL", "INFO").upper()
+logger.remove()
+logger.add(sys.stderr, level=LOG_LEVEL)
+Path("logs").mkdir(exist_ok=True)
+logger.add("logs/generate_chunked_qa.log", level="DEBUG", rotation="50 MB")
 
 
 # --- Recursive chunking ---
@@ -40,11 +69,9 @@ def recursive_chunk(text: str, tokenizer, max_tokens: int, separators: list[str]
     if tok_len <= max_tokens:
         return [text.strip()] if text.strip() else []
 
-    # Find first separator that actually splits the text
     for sep in separators:
         parts = text.split(sep)
         if len(parts) > 1:
-            # Rejoin with separator (keep it at end of each part except last)
             chunks = []
             for i, part in enumerate(parts):
                 if i < len(parts) - 1:
@@ -52,7 +79,6 @@ def recursive_chunk(text: str, tokenizer, max_tokens: int, separators: list[str]
                 else:
                     chunks.append(part)
 
-            # Recursively split any oversized chunks with remaining separators
             remaining_seps = separators[separators.index(sep) + 1:]
             result = []
             for chunk in chunks:
@@ -64,12 +90,10 @@ def recursive_chunk(text: str, tokenizer, max_tokens: int, separators: list[str]
                 elif remaining_seps:
                     result.extend(recursive_chunk(chunk, tokenizer, max_tokens, remaining_seps))
                 else:
-                    # Last resort: hard truncate
                     ids = tokenizer.encode(chunk, add_special_tokens=False)[:max_tokens]
                     result.append(tokenizer.decode(ids).strip())
             return result
 
-    # No separator works — hard truncate
     ids = tokenizer.encode(text, add_special_tokens=False)[:max_tokens]
     return [tokenizer.decode(ids).strip()]
 
@@ -83,17 +107,26 @@ def retrieve_bm25(query: str, chunks: list[str], top_k: int = TOP_K) -> list[tup
     bm25 = BM25Okapi(tokenized_chunks)
     query_tokens = query.lower().split()
     scores = bm25.get_scores(query_tokens)
-
     ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)[:top_k]
     return [(idx, chunks[idx], score) for idx, score in ranked]
 
 
-# --- Context relevance (chunk-level, RAGAS-style) ---
+# --- LLM helpers ---
 
 
 class ChunkRelevanceOutput(BaseModel):
     reasoning: str = ""
     relevant_indices: list[int]
+
+
+class DecompOutput(BaseModel):
+    reasoning: str = ""
+    statements: list[str]
+
+
+class RecallVerdicts(BaseModel):
+    reasoning: str = ""
+    verdicts: dict[str, str]
 
 
 CHUNK_REL_SYSTEM = """You assess whether retrieved text chunks are relevant to answering a question.
@@ -111,59 +144,6 @@ Retrieved chunks:
 Which chunk indices are relevant to answering the question?
 
 Respond in JSON: {{"reasoning": "...", "relevant_indices": [0, 2, ...]}}"""
-
-
-@retry(
-    stop=stop_after_attempt(5),
-    wait=wait_exponential_jitter(initial=0.5, max=3, jitter=1),
-    retry=retry_if_exception_type((json.JSONDecodeError, AssertionError)),
-    reraise=True,
-)
-async def call_llm_json(client: AsyncOpenAI, system: str, user: str) -> dict[str, Any]:
-    resp = await client.chat.completions.create(
-        model=DEEPSEEK_MODEL,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        response_format={"type": "json_object"},
-    )
-    content = resp.choices[0].message.content
-    assert content, "Empty LLM response"
-    return json.loads(content)
-
-
-async def compute_context_relevance(
-    client: AsyncOpenAI, question: str, chunks: list[str]
-) -> dict[str, Any]:
-    n_total = len(chunks)
-    if n_total == 0:
-        return {"context_relevance": 0.0, "n_relevant": 0, "n_total": 0}
-
-    numbered = "\n\n".join(f"[Chunk {i}]\n{c}" for i, c in enumerate(chunks))
-    raw = await call_llm_json(
-        client, CHUNK_REL_SYSTEM,
-        CHUNK_REL_USER.format(question=question, numbered_chunks=numbered),
-    )
-    cr = ChunkRelevanceOutput.model_validate(raw)
-    valid_indices = [idx for idx in cr.relevant_indices if 0 <= idx < n_total]
-    n_relevant = len(valid_indices)
-    score = n_relevant / n_total
-    return {"context_precision": round(score, 4), "n_relevant_chunks": n_relevant, "n_total_chunks": n_total}
-
-
-# --- Context recall (RAGAS-style: answer claims vs retrieved chunks) ---
-
-
-class DecompOutput(BaseModel):
-    reasoning: str = ""
-    statements: list[str]
-
-
-class RecallVerdicts(BaseModel):
-    reasoning: str = ""
-    verdicts: dict[str, str]
-
 
 DECOMPOSE_SYSTEM = "You decompose answers into atomic factual statements. Respond only in json format."
 
@@ -195,44 +175,6 @@ For each statement, classify as SUPPORTED or NOT_SUPPORTED.
 
 Respond in JSON: {{"reasoning": "...", "verdicts": {{"statement text": "SUPPORTED"|"NOT_SUPPORTED"}}}}"""
 
-
-async def compute_context_recall(
-    client: AsyncOpenAI, answer: str, chunks: list[str]
-) -> dict[str, Any]:
-    # Step 1: decompose answer into claims
-    raw1 = await call_llm_json(
-        client, DECOMPOSE_SYSTEM,
-        DECOMPOSE_USER.format(answer=answer),
-    )
-    decomp = DecompOutput.model_validate(raw1)
-    statements = decomp.statements
-
-    if not statements:
-        return {"context_recall": 0.0, "n_supported": 0, "n_claims": 0, "statements": [], "verdicts": {}}
-
-    # Step 2: verify claims against retrieved chunks
-    context = "\n\n".join(f"[Chunk {i}]\n{c}" for i, c in enumerate(chunks))
-    stmt_text = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(statements))
-    raw2 = await call_llm_json(
-        client, RECALL_SYSTEM,
-        RECALL_USER.format(context=context, statements=stmt_text),
-    )
-    rv = RecallVerdicts.model_validate(raw2)
-
-    n_supported = sum(1 for v in rv.verdicts.values() if v == "SUPPORTED")
-    n_claims = len(statements)
-    score = n_supported / n_claims
-    return {
-        "context_recall": round(score, 4),
-        "n_supported": n_supported,
-        "n_claims": n_claims,
-        "statements": statements,
-        "verdicts": rv.verdicts,
-    }
-
-
-# --- Answer regeneration from chunks ---
-
 REGEN_SYSTEM = """You answer questions using ONLY the provided context chunks.
 Be thorough and detailed, but do NOT include any information not found in the context.
 If the context does not contain enough information to fully answer the question, answer
@@ -247,6 +189,41 @@ Question:
 Answer the question using ONLY the information in the context above."""
 
 
+def make_client() -> AsyncOpenAI:
+    return AsyncOpenAI(api_key=os.environ["DEEPSEEK_API_KEY"], base_url=BASE_URL)
+
+
+@retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential_jitter(initial=0.5, max=3, jitter=1),
+    retry=retry_if_exception_type((json.JSONDecodeError, AssertionError)),
+    before_sleep=lambda rs: logger.warning(
+        f"LLM json retry {rs.attempt_number}/5: {rs.outcome.exception()!r}"
+    ),
+    reraise=True,
+)
+async def call_llm_json(client: AsyncOpenAI, system: str, user: str) -> dict[str, Any]:
+    resp = await client.chat.completions.create(
+        model=DEEPSEEK_MODEL,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        response_format={"type": "json_object"},
+    )
+    content = resp.choices[0].message.content
+    assert content, "Empty LLM response"
+    return json.loads(content)
+
+
+@retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential_jitter(initial=0.5, max=3, jitter=1),
+    before_sleep=lambda rs: logger.warning(
+        f"Regen retry {rs.attempt_number}/5: {rs.outcome.exception()!r}"
+    ),
+    reraise=True,
+)
 async def regenerate_answer(client: AsyncOpenAI, question: str, chunks: list[str]) -> tuple[str, str]:
     """Returns (answer, reasoning_content)."""
     context = "\n\n".join(f"[Chunk {i}]\n{c}" for i, c in enumerate(chunks))
@@ -263,64 +240,89 @@ async def regenerate_answer(client: AsyncOpenAI, question: str, chunks: list[str
     return answer, reasoning
 
 
-# --- Main ---
+# --- Evaluation ---
 
 
-async def main():
-    t0 = time.monotonic()
+async def compute_context_precision(
+    client: AsyncOpenAI, question: str, chunks: list[str]
+) -> dict[str, Any]:
+    n_total = len(chunks)
+    if n_total == 0:
+        return {"context_precision": 0.0, "n_relevant_chunks": 0, "n_total_chunks": 0}
+    numbered = "\n\n".join(f"[Chunk {i}]\n{c}" for i, c in enumerate(chunks))
+    raw = await call_llm_json(
+        client, CHUNK_REL_SYSTEM,
+        CHUNK_REL_USER.format(question=question, numbered_chunks=numbered),
+    )
+    cr = ChunkRelevanceOutput.model_validate(raw)
+    valid_indices = [idx for idx in cr.relevant_indices if 0 <= idx < n_total]
+    n_relevant = len(valid_indices)
+    score = n_relevant / n_total
+    return {"context_precision": round(score, 4), "n_relevant_chunks": n_relevant, "n_total_chunks": n_total}
 
-    # Load tokenizer
-    print("Loading tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_ID)
 
-    # Load article
-    print(f"Loading article {ARTICLE_ID}...")
-    with open("wikipedia_en.jsonl") as f:
-        for line in f:
-            art = json.loads(line)
-            if art["article_id"] == ARTICLE_ID:
-                break
-    print(f"  Title: {art['title']}, text length: {len(art['text'])} chars")
+async def compute_context_recall(
+    client: AsyncOpenAI, answer: str, chunks: list[str]
+) -> dict[str, Any]:
+    raw1 = await call_llm_json(
+        client, DECOMPOSE_SYSTEM,
+        DECOMPOSE_USER.format(answer=answer),
+    )
+    decomp = DecompOutput.model_validate(raw1)
+    statements = decomp.statements
 
-    # Chunk
-    print(f"\nChunking with max {MAX_CHUNK_TOKENS} tokens...")
-    chunks = recursive_chunk(art["text"], tokenizer, MAX_CHUNK_TOKENS, SEPARATORS)
-    chunk_tok_lens = [len(tokenizer.encode(c, add_special_tokens=False)) for c in chunks]
-    print(f"  {len(chunks)} chunks, token lengths: min={min(chunk_tok_lens)}, max={max(chunk_tok_lens)}, avg={sum(chunk_tok_lens)/len(chunk_tok_lens):.0f}")
+    if not statements:
+        return {"context_recall": 0.0, "n_supported": 0, "n_claims": 0}
 
-    # Load QA pairs for this article
-    qa_pairs = []
-    with open("qa_pairs.jsonl") as f:
-        for line in f:
-            p = json.loads(line)
-            if p["article_id"] == ARTICLE_ID:
-                qa_pairs.append(p)
-    print(f"\n{len(qa_pairs)} QA pairs for article {ARTICLE_ID}")
+    context = "\n\n".join(f"[Chunk {i}]\n{c}" for i, c in enumerate(chunks))
+    stmt_text = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(statements))
+    raw2 = await call_llm_json(
+        client, RECALL_SYSTEM,
+        RECALL_USER.format(context=context, statements=stmt_text),
+    )
+    rv = RecallVerdicts.model_validate(raw2)
 
-    # Retrieve + evaluate context precision & recall
-    client = AsyncOpenAI(api_key=os.environ["DEEPSEEK_API_KEY"], base_url=BASE_URL)
+    n_supported = sum(1 for v in rv.verdicts.values() if v == "SUPPORTED")
+    n_claims = len(statements)
+    score = n_supported / n_claims
+    return {"context_recall": round(score, 4), "n_supported": n_supported, "n_claims": n_claims}
 
-    async def evaluate_pair(pair: dict) -> dict:
+
+# --- Process one QA pair ---
+
+
+async def process_pair(
+    client: AsyncOpenAI,
+    semaphore: asyncio.Semaphore,
+    pair: dict,
+    chunks: list[str],
+    article_title: str,
+) -> dict:
+    async with semaphore:
         q = pair["question"]
-        # Retrieve by golden answer
         retrieved = retrieve_bm25(pair["answer"], chunks, TOP_K)
         retrieved_chunks = [chunk for _, chunk, _ in retrieved]
 
-        # Regenerate answer from retrieved chunks
         regen_answer, reasoning = await regenerate_answer(client, q, retrieved_chunks)
 
-        # Eval precision (chunks vs question) and recall (regen answer claims vs chunks)
         cp, cr = await asyncio.gather(
-            compute_context_relevance(client, q, retrieved_chunks),
+            compute_context_precision(client, q, retrieved_chunks),
             compute_context_recall(client, regen_answer, retrieved_chunks),
         )
 
+        logger.debug(
+            f"[{article_title}] {pair['difficulty']} prec={cp['context_precision']:.2f} "
+            f"rec={cr['context_recall']:.2f} q={q[:50]}..."
+        )
+
         return {
+            "article_id": pair["article_id"],
+            "title": article_title,
+            "difficulty": pair["difficulty"],
             "question": q,
             "golden_answer": pair["answer"],
             "regen_answer": regen_answer,
             "reasoning_content": reasoning,
-            "difficulty": pair["difficulty"],
             "context_chunks": retrieved_chunks,
             "bm25_scores": [round(s, 3) for _, _, s in retrieved],
             "chunk_indices": [idx for idx, _, _ in retrieved],
@@ -328,38 +330,136 @@ async def main():
             **cr,
         }
 
-    print("\nEvaluating all pairs concurrently...")
-    results = await asyncio.gather(*[evaluate_pair(p) for p in qa_pairs])
-    results = list(results)
 
-    print(f"\n{'='*90}")
-    print(f"{'Difficulty':<12} {'Precision':>10} {'Recall':>10} {'Claims':>8}  Question (truncated)")
-    print(f"{'='*90}")
-    for r in results:
-        sup = f"{r['n_supported']}/{r['n_claims']}"
-        print(f"{r['difficulty']:<12} {r['context_precision']:>10.3f} {r['context_recall']:>10.3f} {sup:>8}  {r['question'][:55]}...")
+# --- Checkpointing ---
 
-    # Summary
-    print(f"\n{'='*90}")
-    print(f"{'Difficulty':<12} {'Avg Prec':>10} {'Avg Recall':>12}  (n)")
-    print(f"{'-'*50}")
-    for diff in ["easy", "medium", "hard"]:
-        precs = [r["context_precision"] for r in results if r["difficulty"] == diff]
-        recs = [r["context_recall"] for r in results if r["difficulty"] == diff]
-        if precs:
-            print(f"{diff:<12} {sum(precs)/len(precs):>10.3f} {sum(recs)/len(recs):>12.3f}  ({len(precs)})")
 
-    all_prec = [r["context_precision"] for r in results]
-    all_rec = [r["context_recall"] for r in results]
-    print(f"{'OVERALL':<12} {sum(all_prec)/len(all_prec):>10.3f} {sum(all_rec)/len(all_rec):>12.3f}  ({len(results)})")
+def load_processed_article_ids(path: Path) -> set[int]:
+    """Load article_ids already in output file for resume."""
+    if not path.exists() or path.stat().st_size == 0:
+        return set()
+    ids: set[int] = set()
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+                if "article_id" in record:
+                    ids.add(record["article_id"])
+            except json.JSONDecodeError:
+                continue
+    return ids
+
+
+def write_jsonl(records: list[dict], path: Path) -> None:
+    """Append records to JSONL file."""
+    with open(path, "a") as f:
+        for r in records:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+
+# --- Main ---
+
+
+async def main() -> None:
+    parser = argparse.ArgumentParser(description="Generate chunked QA pairs")
+    parser.add_argument("n", nargs="?", type=int, default=None, help="Number of articles (default: all)")
+    parser.add_argument("-o", "--output", type=Path, default=OUTPUT_FILE, help="Output JSONL path")
+    args = parser.parse_args()
+
+    output_path = args.output
+
+    # Load tokenizer
+    logger.info(f"Loading tokenizer {TOKENIZER_ID}...")
+    tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_ID)
+
+    # Load all QA pairs, group by article_id
+    logger.info(f"Loading QA pairs from {INPUT_FILE}...")
+    pairs_by_article: dict[int, list[dict]] = {}
+    titles_by_article: dict[int, str] = {}
+    with open(INPUT_FILE) as f:
+        for line in f:
+            p = json.loads(line)
+            aid = p["article_id"]
+            pairs_by_article.setdefault(aid, []).append(p)
+            titles_by_article[aid] = p.get("title", "")
+
+    all_article_ids = sorted(pairs_by_article.keys())
+    if args.n is not None:
+        all_article_ids = all_article_ids[:args.n]
+    logger.info(f"{len(all_article_ids)} articles, {sum(len(pairs_by_article[a]) for a in all_article_ids)} QA pairs")
+
+    # Resume: skip already-processed articles
+    processed_ids = load_processed_article_ids(output_path)
+    if processed_ids:
+        before = len(all_article_ids)
+        all_article_ids = [a for a in all_article_ids if a not in processed_ids]
+        logger.info(f"Resume: skipped {before - len(all_article_ids)} already-processed, {len(all_article_ids)} remaining")
+
+    if not all_article_ids:
+        logger.info("All articles already processed. Nothing to do.")
+        return
+
+    # Load articles we need
+    logger.info(f"Loading {len(all_article_ids)} articles from wikipedia_en.jsonl...")
+    articles = load_articles_by_id(all_article_ids)
+    article_texts = {a["article_id"]: a["text"] for a in articles}
+    logger.info(f"Loaded {len(article_texts)} articles")
+
+    client = make_client()
+    semaphore = asyncio.Semaphore(MAX_CONCURRENT)
+
+    total_pairs = 0
+    t0 = time.monotonic()
+
+    for batch_start in range(0, len(all_article_ids), BATCH_SIZE):
+        batch_ids = all_article_ids[batch_start : batch_start + BATCH_SIZE]
+        batch_num = batch_start // BATCH_SIZE + 1
+        total_batches = (len(all_article_ids) + BATCH_SIZE - 1) // BATCH_SIZE
+        logger.info(f"Batch {batch_num}/{total_batches} ({len(batch_ids)} articles)...")
+
+        batch_results = []
+        for aid in batch_ids:
+            text = article_texts.get(aid)
+            if not text:
+                logger.warning(f"Article {aid} not found in wikipedia_en.jsonl, skipping")
+                continue
+
+            # Chunk this article
+            chunks = recursive_chunk(text, tokenizer, MAX_CHUNK_TOKENS, SEPARATORS)
+            if not chunks:
+                logger.warning(f"Article {aid} produced 0 chunks, skipping")
+                continue
+
+            title = titles_by_article.get(aid, "")
+            pairs = pairs_by_article[aid]
+            logger.info(f"  Article {aid} ({title}): {len(chunks)} chunks, {len(pairs)} pairs")
+
+            # Process all pairs for this article concurrently
+            tasks = [process_pair(client, semaphore, p, chunks, title) for p in pairs]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for r in results:
+                if isinstance(r, Exception):
+                    logger.error(f"  Failed pair in article {aid}: {r!r}")
+                else:
+                    batch_results.append(r)
+
+        # Write batch checkpoint
+        if batch_results:
+            write_jsonl(batch_results, output_path)
+            total_pairs += len(batch_results)
+            elapsed = time.monotonic() - t0
+            rate = total_pairs / elapsed * 60
+            logger.info(
+                f"  Checkpoint: {total_pairs} pairs written, "
+                f"{elapsed:.0f}s elapsed, {rate:.0f} pairs/min"
+            )
 
     elapsed = time.monotonic() - t0
-    print(f"\nDone in {elapsed:.1f}s")
-
-    # Dump full results
-    with open("play.py.output.json", "w") as f:
-        json.dump(results, f, indent=2)
-    print(f"Full results written to play.py.output.json")
+    logger.info(f"Done: {total_pairs} pairs in {elapsed:.0f}s ({total_pairs/elapsed*60:.0f} pairs/min)")
 
 
 if __name__ == "__main__":
