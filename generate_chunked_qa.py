@@ -16,6 +16,7 @@ Usage:
 
 import argparse
 import asyncio
+from asyncio import timeout as async_timeout
 import json
 import os
 import sys
@@ -24,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
-from openai import AsyncOpenAI
+from openai import APIError, APITimeoutError, AsyncOpenAI
 from pydantic import BaseModel
 from rank_bm25 import BM25Okapi
 from tenacity import (
@@ -44,7 +45,7 @@ MAX_CHUNK_TOKENS = 512
 TOP_K = 3
 DEEPSEEK_MODEL = "deepseek-v4-flash"
 BASE_URL = "https://api.deepseek.com"
-MAX_CONCURRENT = 10
+MAX_CONCURRENT = 50
 BATCH_SIZE = 20
 INPUT_FILE = Path("qa_pairs.jsonl")
 OUTPUT_FILE = Path("qa_pairs_chunked.jsonl")
@@ -196,21 +197,22 @@ def make_client() -> AsyncOpenAI:
 @retry(
     stop=stop_after_attempt(5),
     wait=wait_exponential_jitter(initial=0.5, max=3, jitter=1),
-    retry=retry_if_exception_type((json.JSONDecodeError, AssertionError)),
+    retry=retry_if_exception_type((json.JSONDecodeError, AssertionError, APIError, APITimeoutError, TimeoutError)),
     before_sleep=lambda rs: logger.warning(
         f"LLM json retry {rs.attempt_number}/5: {rs.outcome.exception()!r}"
     ),
     reraise=True,
 )
 async def call_llm_json(client: AsyncOpenAI, system: str, user: str) -> dict[str, Any]:
-    resp = await client.chat.completions.create(
-        model=DEEPSEEK_MODEL,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        response_format={"type": "json_object"},
-    )
+    async with async_timeout(60):
+        resp = await client.chat.completions.create(
+            model=DEEPSEEK_MODEL,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            response_format={"type": "json_object"},
+        )
     content = resp.choices[0].message.content
     assert content, "Empty LLM response"
     return json.loads(content)
@@ -219,6 +221,7 @@ async def call_llm_json(client: AsyncOpenAI, system: str, user: str) -> dict[str
 @retry(
     stop=stop_after_attempt(5),
     wait=wait_exponential_jitter(initial=0.5, max=3, jitter=1),
+    retry=retry_if_exception_type((APIError, APITimeoutError, TimeoutError)),
     before_sleep=lambda rs: logger.warning(
         f"Regen retry {rs.attempt_number}/5: {rs.outcome.exception()!r}"
     ),
@@ -227,13 +230,14 @@ async def call_llm_json(client: AsyncOpenAI, system: str, user: str) -> dict[str
 async def regenerate_answer(client: AsyncOpenAI, question: str, chunks: list[str]) -> tuple[str, str]:
     """Returns (answer, reasoning_content)."""
     context = "\n\n".join(f"[Chunk {i}]\n{c}" for i, c in enumerate(chunks))
-    resp = await client.chat.completions.create(
-        model=DEEPSEEK_MODEL,
-        messages=[
-            {"role": "system", "content": REGEN_SYSTEM},
-            {"role": "user", "content": REGEN_USER.format(context=context, question=question)},
-        ],
-    )
+    async with async_timeout(90):
+        resp = await client.chat.completions.create(
+            model=DEEPSEEK_MODEL,
+            messages=[
+                {"role": "system", "content": REGEN_SYSTEM},
+                {"role": "user", "content": REGEN_USER.format(context=context, question=question)},
+            ],
+        )
     msg = resp.choices[0].message
     answer = msg.content or ""
     reasoning = getattr(msg, "reasoning_content", None) or ""
@@ -419,14 +423,14 @@ async def main() -> None:
         total_batches = (len(all_article_ids) + BATCH_SIZE - 1) // BATCH_SIZE
         logger.info(f"Batch {batch_num}/{total_batches} ({len(batch_ids)} articles)...")
 
-        batch_results = []
+        # Pre-chunk all articles in batch, then launch ALL pairs concurrently
+        all_tasks = []
         for aid in batch_ids:
             text = article_texts.get(aid)
             if not text:
                 logger.warning(f"Article {aid} not found in wikipedia_en.jsonl, skipping")
                 continue
 
-            # Chunk this article
             chunks = recursive_chunk(text, tokenizer, MAX_CHUNK_TOKENS, SEPARATORS)
             if not chunks:
                 logger.warning(f"Article {aid} produced 0 chunks, skipping")
@@ -436,15 +440,22 @@ async def main() -> None:
             pairs = pairs_by_article[aid]
             logger.info(f"  Article {aid} ({title}): {len(chunks)} chunks, {len(pairs)} pairs")
 
-            # Process all pairs for this article concurrently
-            tasks = [process_pair(client, semaphore, p, chunks, title) for p in pairs]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for p in pairs:
+                all_tasks.append(process_pair(client, semaphore, p, chunks, title))
 
-            for r in results:
-                if isinstance(r, Exception):
-                    logger.error(f"  Failed pair in article {aid}: {r!r}")
-                else:
-                    batch_results.append(r)
+        logger.info(f"  Launching {len(all_tasks)} pairs concurrently (semaphore={MAX_CONCURRENT})...")
+        all_results = await asyncio.gather(*all_tasks, return_exceptions=True)
+
+        batch_results = []
+        n_failed = 0
+        for r in all_results:
+            if isinstance(r, Exception):
+                n_failed += 1
+                logger.error(f"  Failed pair: {r!r}")
+            else:
+                batch_results.append(r)
+        if n_failed:
+            logger.warning(f"  {n_failed} pairs failed in batch {batch_num}")
 
         # Write batch checkpoint
         if batch_results:
