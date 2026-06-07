@@ -404,8 +404,7 @@ async def main() -> None:
 
     # Load articles we need
     logger.info(f"Loading {len(all_article_ids)} articles from wikipedia_en.jsonl...")
-    articles = load_articles_by_id(all_article_ids)
-    article_texts = {a["article_id"]: a["text"] for a in articles}
+    article_texts = load_articles_by_id(set(all_article_ids))
     logger.info(f"Loaded {len(article_texts)} articles")
 
     client = make_client()
