@@ -104,7 +104,7 @@ def main():
 
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_ID,
-        torch_dtype=torch.bfloat16,
+        dtype=torch.bfloat16,
         attn_implementation="eager",
         device_map="auto",
     )
@@ -134,7 +134,7 @@ def main():
         model=model,
         args=args,
         train_dataset=tokenized,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
     )
 
     trainer.train()
