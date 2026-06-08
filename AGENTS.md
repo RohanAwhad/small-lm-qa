@@ -155,11 +155,51 @@ uv run python summarize_scores.py qa_test_hf_baseline_ragas_eval.jsonl
 uv run python summarize_scores.py qa_test_hf_step500_ragas_eval.jsonl
 ```
 
-## Self-hosted DeepSeek V4 Flash (rh-h100-07)
+## Self-hosted DeepSeek V4 Flash
 - Model: `deepseek-ai/DeepSeek-V4-Flash` on all 8 GPUs via vLLM
-- Reachable from node 01 at: `http://10.241.128.23:8000/v1`
+- Currently deployed on rh-h100-07; reachable from node 01 at: `http://10.241.128.23:8000/v1`
 - Model name for API: `deepseek-ai/DeepSeek-V4-Flash`
 - Can replace DeepSeek API for RAGAS eval — set `BASE_URL` and `DEEPSEEK_MODEL` in eval scripts
+- Use `MAX_CONCURRENT = 10` when running against self-hosted (not 50 like public API)
+
+### RAGAS eval via self-hosted model (on node 01)
+```bash
+# Run from node 01 — uses DeepSeek V4 Flash on node 07 as LLM judge
+ssh rh-h100-01
+cd ~/rawhad/small_lm/qa
+DEEPSEEK_API_KEY=dummy .venv/bin/python -c "
+import evaluate_ragas, asyncio, os
+from pathlib import Path
+evaluate_ragas.BASE_URL = 'http://10.241.128.23:8000/v1'
+evaluate_ragas.DEEPSEEK_MODEL = 'deepseek-ai/DeepSeek-V4-Flash'
+evaluate_ragas.MAX_CONCURRENT = 10
+os.environ['DEEPSEEK_API_KEY'] = 'dummy'
+asyncio.run(evaluate_ragas.main(
+    Path('qa_test_hf_step1031.jsonl'),
+    Path('qa_test_hf_step1031_ragas_selfhosted.jsonl'),
+    Path('qa_pairs.jsonl'),
+))
+"
+```
+- Full deployment details (flags, setup, troubleshooting): see **vLLM Model Deployment** skill
+
+### Deploying on any node (venv setup)
+```bash
+# 1. Create venv dir and HF cache on NVMe (check `df -h` for the mount path)
+ssh rh-h100-XX 'mkdir -p ~/rawhad/venvs && mkdir -p /mnt/nvme0n1/rawhad/hf_cache'
+
+# 2. Create venv and install vllm
+ssh rh-h100-XX 'cd ~/rawhad/venvs && uv venv vllm_venv --python 3.12'
+ssh rh-h100-XX 'source ~/rawhad/venvs/vllm_venv/bin/activate && uv pip install vllm'
+
+# 3. Deploy in tmux
+ssh rh-h100-XX "tmux new-session -d -s vllm 'export HF_HOME=/mnt/nvme0n1/rawhad/hf_cache && source ~/rawhad/venvs/vllm_venv/bin/activate && vllm serve deepseek-ai/DeepSeek-V4-Flash --trust-remote-code --kv-cache-dtype fp8 --block-size 256 --enable-expert-parallel --tensor-parallel-size 8 --tokenizer-mode deepseek_v4 --tool-call-parser deepseek_v4 --enable-auto-tool-choice --reasoning-parser deepseek_v4 2>&1 | tee ~/rawhad/vllm_deepseek_v4_flash.log; sleep infinity'"
+
+# 4. Monitor
+ssh rh-h100-XX 'tail -f ~/rawhad/vllm_deepseek_v4_flash.log'
+```
+- NVMe mount path varies by node — check `df -h | grep nvme` first
+- Requires full node (8 GPUs) — reserve all before deploying
 
 ## Code conventions
 - All scripts use `asyncio.run(main())` — no sync entrypoints (training scripts are sync)

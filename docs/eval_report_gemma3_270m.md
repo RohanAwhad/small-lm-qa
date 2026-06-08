@@ -95,3 +95,14 @@ Earlier evals used full Wikipedia articles as context via Ollama, which mismatch
 | Baseline (HF, chunks) | 0.383 | Correct eval setup |
 
 The 0.236 → 0.383 jump shows that matching eval context to training context is critical for this model.
+
+## LLM judge parity: DeepSeek API vs self-hosted
+
+Step 1031 evaluated with both judges (same generated answers, different LLM judge):
+
+| Judge | F1 | Precision | Recall |
+|---|---|---|---|
+| DeepSeek API (`deepseek-v4-flash`) | 0.449 | 0.526 | 0.481 |
+| Self-hosted V4 Flash (`deepseek-ai/DeepSeek-V4-Flash` on rh-h100-07) | 0.489 | 0.565 | 0.509 |
+
+Self-hosted scores ~9% higher F1 — likely a different model version or thinking behavior. Not 1:1 parity, but directionally consistent (same difficulty ranking, same relative checkpoint ordering). When comparing checkpoints, use the same judge throughout.
