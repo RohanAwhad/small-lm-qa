@@ -1,6 +1,7 @@
 """Fine-tune Gemma3 270M on chunked Wikipedia QA with reasoning."""
 import json
 import os
+from dataclasses import dataclass
 
 import torch
 from datasets import Dataset
@@ -15,8 +16,8 @@ TRAIN_DATA = "qa_pairs_chunked.jsonl"
 MAX_SEQ_LEN = 1024
 MAX_REASONING_TOKENS = 512
 OUTPUT_DIR = "model_weights/gemma3-270m/hf_ckpts"
-BATCH_SIZE = 4
-GRAD_ACCUM_STEPS = 16
+BATCH_SIZE = 32
+GRAD_ACCUM_STEPS = 2
 LR = 1e-6
 NUM_EPOCHS = 10
 MAX_STEPS = -1  # full epoch
@@ -75,14 +76,34 @@ def tokenize_fn(examples, tokenizer):
         examples["text"],
         truncation=True,
         max_length=MAX_SEQ_LEN,
-        padding="max_length",
+        padding=False,
     )
-    # mask padding tokens in labels with -100 so they're ignored in loss
-    labels = []
-    for ids, mask in zip(out["input_ids"], out["attention_mask"]):
-        labels.append([id if m == 1 else -100 for id, m in zip(ids, mask)])
-    out["labels"] = labels
+    out["labels"] = [list(ids) for ids in out["input_ids"]]
     return out
+
+
+@dataclass
+class DynamicPadCollator:
+    """Pads each batch to the longest sequence in the batch, not max_seq_len."""
+    tokenizer: AutoTokenizer
+
+    def __call__(self, features: list[dict]) -> dict:
+        max_len = max(len(f["input_ids"]) for f in features)
+        pad_id = self.tokenizer.pad_token_id
+
+        input_ids, attention_mask, labels = [], [], []
+        for f in features:
+            seq_len = len(f["input_ids"])
+            pad_len = max_len - seq_len
+            input_ids.append(f["input_ids"] + [pad_id] * pad_len)
+            attention_mask.append(f["attention_mask"] + [0] * pad_len)
+            labels.append(f["labels"] + [-100] * pad_len)
+
+        return {
+            "input_ids": torch.tensor(input_ids),
+            "attention_mask": torch.tensor(attention_mask),
+            "labels": torch.tensor(labels),
+        }
 
 # ============================================================================
 # Main
@@ -105,7 +126,7 @@ def main():
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_ID,
         dtype=torch.bfloat16,
-        attn_implementation="eager",
+        attn_implementation="sdpa",
         device_map="auto",
     )
     print(f"Model params: {sum(p.numel() for p in model.parameters()):,}")
@@ -122,12 +143,13 @@ def main():
         save_total_limit=3,
         bf16=True,
         max_grad_norm=1.0,
-        gradient_checkpointing=True,
+        gradient_checkpointing=False,
         optim="adamw_torch",
         lr_scheduler_type="cosine",
         warmup_steps=100,
         report_to="none",
-        dataloader_pin_memory=False,
+        dataloader_pin_memory=True,
+        dataloader_num_workers=4,
     )
 
     trainer = Trainer(
@@ -135,6 +157,7 @@ def main():
         args=args,
         train_dataset=tokenized,
         processing_class=tokenizer,
+        data_collator=DynamicPadCollator(tokenizer),
     )
 
     trainer.train()
