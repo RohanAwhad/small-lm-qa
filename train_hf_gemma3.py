@@ -147,7 +147,8 @@ def main():
         optim="adamw_torch",
         lr_scheduler_type="cosine",
         warmup_steps=100,
-        report_to="none",
+        report_to="wandb",
+        run_name="gemma3-270m-chunked-qa-reasoning",
         dataloader_pin_memory=True,
         dataloader_num_workers=4,
 
