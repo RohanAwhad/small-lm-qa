@@ -15,6 +15,7 @@
 - `evaluate_ragas.py` — **primary eval**: RAGAS-style claim decomposition → P/R/F1 per pair. Dual mode: reference-based (uses `model_answer`) or article-based (against Wikipedia text). Has resume support.
 - `verify_golden.py` — 4-vote LLM judge against Wikipedia article; unanimous = correct. No resume support (clears output on rerun).
 - `generate_gemma_answers.py` — re-answers questions using Gemma3 270M via local Ollama; tenacity retry, line-by-line file flush (not streaming inference: `stream=False`)
+- `generate_hf_answers.py` — batch HF Transformers inference on GPU; drop-in replacement for `generate_gemma_answers.py`. Auto-detects chunked input (`context_chunks`) vs full article. Use on remote GPU node with `.venv/bin/python`.
 - `summarize_scores.py` — pretty-prints RAGAS eval scores (P/R/F1, claim counts) grouped by difficulty
 - `evaluate_qa.py` — **legacy**: 1-5 judge format, superseded by `evaluate_ragas.py`
 - `compare_gemma.py` — **legacy**: evaluates Gemma3 against DeepSeek golden using old 1-5 format
