@@ -5,9 +5,9 @@
 - **Base model**: `unsloth/gemma-3-270m-it` (268M params)
 - **Training data**: `qa_pairs_chunked.jsonl` — Wikipedia QA with BM25-retrieved chunks + DeepSeek reasoning
 - **Training runs**:
-  - **Run 1** (steps 500/1000/10000): ~200 articles, LR=3e-5, bs=16, grad_accum=4 (effective bs=64), 10 epochs
-  - **Run 2** (step 1031): ~5000 articles, same hyperparams — more diverse training data
-- **Max seq len**: 1024
+  - **Run 1** (steps 500/1000/10000): ~200 articles, LR=3e-5, bs=16, grad_accum=4 (effective bs=64), 10 epochs, max_seq_len=1024
+  - **Run 2** (step 1031, best): ~5000 articles, LR=3e-5, constant schedule, 1 epoch, same batch config. Checkpoint lost (Trainer rotated it out).
+  - **Run 2 continued** (step 3500): same run, later checkpoint — mild overfitting vs step 1031
 - **Eval set**: `qa_pairs_chunked_test.jsonl` (600 pairs: 200 easy, 200 medium, 200 hard)
 - **Eval method**: RAGAS claim decomposition — P/R/F1 against golden reference answers
 - **Inference**: HF Transformers batch inference on H100 (`generate_hf_answers.py`, bs=64, bf16, SDPA)
