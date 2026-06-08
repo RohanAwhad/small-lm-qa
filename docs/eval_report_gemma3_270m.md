@@ -106,3 +106,21 @@ Step 1031 evaluated with both judges (same generated answers, different LLM judg
 | Self-hosted V4 Flash (`deepseek-ai/DeepSeek-V4-Flash` on rh-h100-07) | 0.489 | 0.565 | 0.509 |
 
 Self-hosted scores ~9% higher F1 — likely a different model version or thinking behavior. Not 1:1 parity, but directionally consistent (same difficulty ranking, same relative checkpoint ordering). When comparing checkpoints, use the same judge throughout.
+
+### Full results (self-hosted judge)
+
+| Model | F1 | Precision | Recall | Delta F1 |
+|---|---|---|---|---|
+| Baseline (pre-trained) | 0.420 | 0.513 | 0.436 | — |
+| **Step 1031 (5k articles)** | **0.489** | **0.565** | **0.509** | **+16.4%** |
+| Step 3500 (5k articles) | 0.485 | 0.565 | 0.503 | +15.5% |
+
+**By difficulty (self-hosted judge)**
+
+|  | Baseline F1 | Step 1031 F1 | Step 3500 F1 |
+|---|---|---|---|
+| easy | 0.501 | 0.559 | 0.561 |
+| medium | 0.433 | 0.505 | 0.483 |
+| hard | 0.327 | 0.402 | 0.410 |
+
+Step 1031 remains the best checkpoint. Step 3500 shows mild overfitting on medium questions (0.505 → 0.483) while hard improves slightly (0.402 → 0.410). Overall, the model converges around step 1031.
