@@ -1,4 +1,4 @@
-"""Fine-tune Gemma3 270M on Wikipedia QA pairs using HF Transformers."""
+"""Fine-tune Gemma3 270M on chunked Wikipedia QA with reasoning."""
 import json
 import os
 
@@ -6,15 +6,14 @@ import torch
 from datasets import Dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments, Trainer
 
-from utils.wikipedia_loader import load_articles_by_id
-
 # ============================================================================
 # Config
 # ============================================================================
 
 MODEL_ID = "unsloth/gemma-3-270m-it"
-TRAIN_DATA = "qa_train.json"
-MAX_SEQ_LEN = 4096
+TRAIN_DATA = "qa_pairs_chunked.jsonl"
+MAX_SEQ_LEN = 1024
+MAX_REASONING_TOKENS = 512
 OUTPUT_DIR = "model_weights/gemma3-270m/hf_ckpts"
 BATCH_SIZE = 4
 GRAD_ACCUM_STEPS = 16
@@ -22,37 +21,52 @@ LR = 1e-6
 NUM_EPOCHS = 10
 MAX_STEPS = -1  # full epoch
 LOGGING_STEPS = 1
-SAVE_STEPS = 224
+SAVE_STEPS = 500
+
+SYSTEM_PROMPT = "Answer the question using the provided context."
 
 # ============================================================================
 # Data
 # ============================================================================
 
 def build_dataset(tokenizer) -> Dataset:
-    pairs = json.load(open(TRAIN_DATA))
+    pairs = []
+    with open(TRAIN_DATA) as f:
+        for line in f:
+            pairs.append(json.loads(line))
     print(f"Loaded {len(pairs)} QA pairs from {TRAIN_DATA}")
 
-    article_ids = {p["article_id"] for p in pairs}
-    articles = load_articles_by_id(article_ids)
-    print(f"Loaded {len(articles)} articles")
-
     texts = []
+    n_skipped_reasoning = 0
+    n_skipped_length = 0
     for p in pairs:
-        ctx = articles.get(p["article_id"], "")
-        if not ctx:
+        reasoning = p.get("reasoning_content", "")
+        # Filter: skip if reasoning exceeds token budget
+        rc_toks = len(tokenizer.encode(reasoning, add_special_tokens=False))
+        if rc_toks > MAX_REASONING_TOKENS:
+            n_skipped_reasoning += 1
             continue
-        # truncate context
-        max_ctx_chars = MAX_SEQ_LEN * 8
-        ctx = ctx[:max_ctx_chars]
+
+        chunks_text = "\n\n".join(p["context_chunks"])
+        assistant_content = f"<reasoning>\n{reasoning}\n</reasoning>\n\n{p['regen_answer']}"
 
         messages = [
-            {"role": "user", "content": f"Article:\n{ctx}\n\nQuestion: {p['question']}\n\nAnswer:"},
-            {"role": "assistant", "content": p["answer"]},
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": f"Context:\n{chunks_text}\n\nQuestion: {p['question']}"},
+            {"role": "assistant", "content": assistant_content},
         ]
         text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
+
+        # Filter: skip if total sequence exceeds max
+        tok_len = len(tokenizer.encode(text, add_special_tokens=False))
+        if tok_len > MAX_SEQ_LEN:
+            n_skipped_length += 1
+            continue
+
         texts.append(text)
 
     print(f"Formatted {len(texts)} examples")
+    print(f"Skipped: {n_skipped_reasoning} (reasoning > {MAX_REASONING_TOKENS} tok), {n_skipped_length} (seq > {MAX_SEQ_LEN} tok)")
     return Dataset.from_dict({"text": texts})
 
 
@@ -124,8 +138,10 @@ def main():
     )
 
     trainer.train()
-    trainer.save_model(os.path.join(OUTPUT_DIR, "final"))
-    print(f"Saved to {OUTPUT_DIR}/final")
+    final_dir = os.path.join(OUTPUT_DIR, "final")
+    trainer.save_model(final_dir)
+    tokenizer.save_pretrained(final_dir)
+    print(f"Saved to {final_dir}")
 
 
 if __name__ == "__main__":
