@@ -15,11 +15,11 @@ MODEL_ID = "unsloth/gemma-3-270m-it"
 TRAIN_DATA = "qa_pairs_chunked_train.jsonl"
 MAX_SEQ_LEN = 1024
 MAX_REASONING_TOKENS = 512
-OUTPUT_DIR = "model_weights/gemma3-270m/hf_ckpts"
+OUTPUT_DIR = "model_weights/gemma3-270m/5k-articles"
 BATCH_SIZE = 16
 GRAD_ACCUM_STEPS = 4
 LR = 3e-5
-NUM_EPOCHS = 1
+NUM_EPOCHS = 11  # 1 done + 10 more
 MAX_STEPS = -1  # full epoch
 LOGGING_STEPS = 1
 SAVE_STEPS = 500
@@ -163,7 +163,7 @@ def main():
         data_collator=DynamicPadCollator(tokenizer),
     )
 
-    trainer.train()
+    trainer.train(resume_from_checkpoint=True)
     final_dir = os.path.join(OUTPUT_DIR, "final")
     trainer.save_model(final_dir)
     tokenizer.save_pretrained(final_dir)
