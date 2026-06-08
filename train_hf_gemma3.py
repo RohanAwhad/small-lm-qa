@@ -12,7 +12,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments,
 # ============================================================================
 
 MODEL_ID = "unsloth/gemma-3-270m-it"
-TRAIN_DATA = "qa_pairs_chunked.jsonl"
+TRAIN_DATA = "qa_pairs_chunked_train.jsonl"
 MAX_SEQ_LEN = 1024
 MAX_REASONING_TOKENS = 512
 OUTPUT_DIR = "model_weights/gemma3-270m/hf_ckpts"
