@@ -150,6 +150,7 @@ def main():
         report_to="none",
         dataloader_pin_memory=True,
         dataloader_num_workers=4,
+        torch_compile=True,
     )
 
     trainer = Trainer(
