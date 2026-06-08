@@ -151,6 +151,7 @@ def main():
         report_to="none",
         dataloader_pin_memory=True,
         dataloader_num_workers=4,
+        remove_unused_columns=False,
 
     )
 
