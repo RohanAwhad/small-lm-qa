@@ -155,6 +155,12 @@ uv run python summarize_scores.py qa_test_hf_baseline_ragas_eval.jsonl
 uv run python summarize_scores.py qa_test_hf_step500_ragas_eval.jsonl
 ```
 
+## Self-hosted DeepSeek V4 Flash (rh-h100-07)
+- Model: `deepseek-ai/DeepSeek-V4-Flash` on all 8 GPUs via vLLM
+- Reachable from node 01 at: `http://10.241.128.23:8000/v1`
+- Model name for API: `deepseek-ai/DeepSeek-V4-Flash`
+- Can replace DeepSeek API for RAGAS eval — set `BASE_URL` and `DEEPSEEK_MODEL` in eval scripts
+
 ## Code conventions
 - All scripts use `asyncio.run(main())` — no sync entrypoints (training scripts are sync)
 - Articles loaded from local `wikipedia_en.jsonl` via `wikipedia_loader.py` (pre-downloaded with `download_wikipedia.py`; no longer fetched from HF API on-the-fly)
