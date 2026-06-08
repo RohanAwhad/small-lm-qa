@@ -92,6 +92,68 @@ uv run python tests/test_e2e.py                # req Ollama + gemma3:270m
 - Filters: drop pairs with reasoning > 512 tokens, drop pairs with total seq > 1024 tokens
 - Wandb project: `small-lm-qa`
 
+## Remote GPU node (rh-h100-01)
+- SSH: `ssh rh-h100-01`
+- Project path: `/home/lab/rawhad/small_lm/qa/`
+- Checkpoints: `model_weights/gemma3-270m/hf_ckpts/checkpoint-{500,1000,...}/` and `final/`
+- **Use `.venv/bin/python`** — do NOT use `uv run` on the node (breaks NCCL/torch linkage)
+- Reserve GPUs before use: `ssh rh-h100-01 'gpu reserve --gpu-ids 1 --user "Rohan" --note "reason" --duration 2h'`
+- Training runs on GPU 0; use GPU 1+ for eval: `export CUDA_VISIBLE_DEVICES=1`
+- Wandb project: `small-lm-qa`
+
+### Training workflow (end-to-end)
+```bash
+# 1. Reserve GPU
+ssh rh-h100-01 'gpu reserve --gpus 1 --user "Rohan" --note "gemma3 training" --duration 6h'
+
+# 2. Sync code and data to remote
+cd ~/1_Projects/personal_projects/small_lm/qa
+git push
+ssh rh-h100-01 'cd ~/rawhad/small_lm/qa && git fetch origin && git reset --hard origin/main'
+scp qa_pairs_chunked_train.jsonl rh-h100-01:~/rawhad/small_lm/qa/
+
+# 3. Start training in tmux (use .venv/bin/python, NOT uv run)
+WANDB_KEY=$(echo $WANDB_API_KEY)
+ssh rh-h100-01 "tmux new-session -d -s train \"cd ~/rawhad/small_lm/qa && export CUDA_VISIBLE_DEVICES=0 && export WANDB_API_KEY=$WANDB_KEY && export WANDB_PROJECT=small-lm-qa && .venv/bin/python train_hf_gemma3.py 2>&1 | tee logs/train_chunked_qa.log\""
+
+# 4. Monitor
+ssh rh-h100-01 'tail -5 ~/rawhad/small_lm/qa/logs/train_chunked_qa.log'
+
+# 5. Pull checkpoint to local
+scp rh-h100-01:~/rawhad/small_lm/qa/model_weights/gemma3-270m/hf_ckpts/checkpoint-500/{model.safetensors,config.json,tokenizer.json,tokenizer_config.json,generation_config.json,chat_template.jinja} model_weights/gemma3-270m/hf_ckpts/checkpoint-500/
+
+# 6. Convert to Ollama (requires llama.cpp cloned at /tmp/llama.cpp)
+uv run python /tmp/llama.cpp/convert_hf_to_gguf.py model_weights/gemma3-270m/hf_ckpts/checkpoint-500/ --outtype q8_0 --outfile model_weights/gemma3-270m/gemma3-270m-qa-step500.gguf
+# Note: must patch /tmp/llama.cpp/conversion/base.py — comment out `assert max(tokenizer.vocab.values()) < vocab_size` (2 lines) for Gemma3's 262K vocab
+ollama create gemma3-270m-qa:step500 -f model_weights/gemma3-270m/Modelfile
+
+# 7. Release GPU
+ssh rh-h100-01 'gpu release'
+```
+
+### Remote eval workflow (generate_hf_answers.py)
+```bash
+# On node — batch HF inference, much faster than local Ollama
+ssh rh-h100-01
+cd ~/rawhad/small_lm/qa
+export CUDA_VISIBLE_DEVICES=1
+
+# Baseline
+.venv/bin/python generate_hf_answers.py qa_test.json -o qa_test_hf_baseline.jsonl -m unsloth/gemma-3-270m-it
+
+# Fine-tuned checkpoint
+.venv/bin/python generate_hf_answers.py qa_test.json -o qa_test_hf_step500.jsonl -m model_weights/gemma3-270m/hf_ckpts/checkpoint-500
+
+# Pull results to local
+scp rh-h100-01:~/rawhad/small_lm/qa/qa_test_hf_*.jsonl .
+
+# RAGAS eval locally (uses DeepSeek API)
+uv run python evaluate_ragas.py qa_test_hf_baseline.jsonl --reference qa_pairs.jsonl -o qa_test_hf_baseline_ragas_eval.jsonl
+uv run python evaluate_ragas.py qa_test_hf_step500.jsonl --reference qa_pairs.jsonl -o qa_test_hf_step500_ragas_eval.jsonl
+uv run python summarize_scores.py qa_test_hf_baseline_ragas_eval.jsonl
+uv run python summarize_scores.py qa_test_hf_step500_ragas_eval.jsonl
+```
+
 ## Code conventions
 - All scripts use `asyncio.run(main())` — no sync entrypoints (training scripts are sync)
 - Articles loaded from local `wikipedia_en.jsonl` via `wikipedia_loader.py` (pre-downloaded with `download_wikipedia.py`; no longer fetched from HF API on-the-fly)
