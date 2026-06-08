@@ -130,7 +130,6 @@ def main():
         device_map="auto",
     )
     print(f"Model params: {sum(p.numel() for p in model.parameters()):,}")
-    model = torch.compile(model)
 
     args = TrainingArguments(
         output_dir=OUTPUT_DIR,
@@ -151,7 +150,7 @@ def main():
         report_to="none",
         dataloader_pin_memory=True,
         dataloader_num_workers=4,
-        remove_unused_columns=False,
+
 
     )
 
