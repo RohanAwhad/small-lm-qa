@@ -19,8 +19,8 @@ OUTPUT_DIR = "model_weights/gemma3-270m/hf_ckpts"
 BATCH_SIZE = 16
 GRAD_ACCUM_STEPS = 4
 LR = 3e-5
-NUM_EPOCHS = 100  # high ceiling; MAX_STEPS controls actual length
-MAX_STEPS = 10000
+NUM_EPOCHS = 1
+MAX_STEPS = -1  # full epoch
 LOGGING_STEPS = 1
 SAVE_STEPS = 500
 
@@ -163,7 +163,7 @@ def main():
         data_collator=DynamicPadCollator(tokenizer),
     )
 
-    trainer.train(resume_from_checkpoint=True)
+    trainer.train()
     final_dir = os.path.join(OUTPUT_DIR, "final")
     trainer.save_model(final_dir)
     tokenizer.save_pretrained(final_dir)
