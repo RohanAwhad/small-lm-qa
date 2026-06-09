@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -207,6 +208,8 @@ async def evaluate_pair(
 ) -> dict | None:
     async with semaphore:
         answer = pair.get("model_answer", pair["answer"])
+        # Strip <reasoning>...</reasoning> tags if present
+        answer = re.sub(r"<reasoning>.*?</reasoning>", "", answer, count=1, flags=re.DOTALL).strip()
         baseline = ref_claims if ref_claims is not None else article_claims
         assert baseline is not None, "must provide ref_claims or article_claims"
         t0 = time.monotonic()
