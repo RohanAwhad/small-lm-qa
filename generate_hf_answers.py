@@ -51,7 +51,7 @@ def generate_batch(
         return_tensors="pt",
         padding=True,
         truncation=True,
-        max_length=model.config.max_position_embeddings - MAX_NEW_TOKENS,
+        max_length=getattr(model.config, "max_position_embeddings", 8192) - MAX_NEW_TOKENS,
     ).to(model.device)
 
     with torch.no_grad():
