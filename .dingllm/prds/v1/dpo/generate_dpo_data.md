@@ -85,13 +85,13 @@ vllm serve model_weights/gemma3-270m/hf_ckpts/checkpoint-500 \
 
 ### Concurrency
 - Use async OpenAI client against `http://localhost:8001/v1`
-- Semaphore: 50-100 concurrent requests (vLLM handles batching internally)
+- Semaphore: 160 concurrent requests (270M model on 8x H100 DP8 can handle it)
 - Model name for API: path to checkpoint (vLLM auto-names from model path)
 
 ### Expected throughput
 - 270M model on 8x H100 with data parallel = extremely fast
-- 75K questions x 5 rollouts = 375K generations
-- Estimate: 10-30 minutes total
+- 75K questions x 5 rollouts = 375K generations (but `n=5` means 75K API calls)
+- Estimate: minutes, not hours
 
 ---
 
@@ -117,7 +117,7 @@ Already implemented. Uses DeepSeek V4 Flash (self-hosted on node 01 port 8000).
 ```python
 BASE_URL = "http://localhost:8000/v1"  # DeepSeek on node 01
 DEEPSEEK_MODEL = "deepseek-ai/DeepSeek-V4-Flash"
-MAX_CONCURRENT = 10  # self-hosted limit
+MAX_CONCURRENT = 20  # self-hosted limit
 ```
 
 ### Output schema (per line)
@@ -136,7 +136,7 @@ Same as input + `judgment` field:
 ```
 
 ### Expected throughput
-- 75K questions at MAX_CONCURRENT=10
+- 75K questions at MAX_CONCURRENT=20
 - Estimate: 30-60 minutes
 
 ---
@@ -178,21 +178,14 @@ user: "Context:\n{context}\n\nQuestion: {question}"
 - DeepSeek V4 Flash already serving on port 8000
 - Reserve all 8 GPUs (DeepSeek uses all 8, Gemma3 vLLM needs separate GPUs OR run sequentially)
 
-### Option A: Sequential (simpler, recommended)
-1. Tear down DeepSeek temporarily
-2. Serve Gemma3 270M on all 8 GPUs (DP8) on port 8001
+### Execution order (sequential server swap)
+1. Tear down DeepSeek V4 Flash on port 8000
+2. Serve Gemma3 270M on all 8 GPUs (DP8) on port 8001, MAX_CONCURRENT=160
 3. Run `generate_dpo_rollouts.py` → `dpo_rollouts.jsonl`
 4. Tear down Gemma3 server
 5. Restart DeepSeek V4 Flash on port 8000
-6. Run `judge_dpo_rollouts.py dpo_rollouts.jsonl` → `dpo_rollouts_judged.jsonl`
+6. Run `judge_dpo_rollouts.py dpo_rollouts.jsonl` → `dpo_rollouts_judged.jsonl` (MAX_CONCURRENT=20)
 7. Run `build_dpo_pairs.py dpo_rollouts_judged.jsonl` → `dpo_pairs_train.jsonl`
-
-### Option B: Use DeepSeek API for judging (no server juggling)
-1. Serve Gemma3 270M on all 8 GPUs
-2. Run `generate_dpo_rollouts.py` → `dpo_rollouts.jsonl`
-3. Tear down Gemma3 server
-4. Run `judge_dpo_rollouts.py` against public DeepSeek API (MAX_CONCURRENT=50)
-5. Run `build_dpo_pairs.py`
 
 ### File locations (on node 01)
 ```
@@ -216,6 +209,5 @@ user: "Context:\n{context}\n\nQuestion: {question}"
 ---
 
 ## Open questions
-- Should we use the DeepSeek public API for judging (faster, costs money) or self-hosted (free, slower)?
 - Exact vLLM flags for Gemma3 270M — may need `--dtype float16` or `--dtype bfloat16`
 - Should `build_dpo_pairs.py` also split into train/test?
