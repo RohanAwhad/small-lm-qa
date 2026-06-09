@@ -1,17 +1,20 @@
-"""Generate DPO rollouts: sample N responses per question via vLLM server.
+"""Generate DPO rollouts: sample N responses per question.
 
-Reads qa_pairs_chunked_train.jsonl, sends each prompt to a vLLM-served model
-with n=5 and temperature=1.0, collects all completions.
+Two modes:
+  --hf:  Direct HF Transformers inference on GPU (no server needed)
+  default: Async OpenAI client against a vLLM server
 
 Output: JSONL where each line has the original fields + rollouts list.
 Resume support: skips article_id::question keys already in the output file.
 
 Usage:
-    # Against vLLM-served Gemma3 270M on node 01
+    # HF mode (recommended for small models — no server setup needed)
     .venv/bin/python generate_dpo_rollouts.py qa_pairs_chunked_train.jsonl \
-        -o dpo_rollouts.jsonl \
-        --base-url http://localhost:8001/v1 \
-        --model model_weights/gemma3-270m/hf_ckpts/checkpoint-500
+        -o dpo_rollouts.jsonl --hf -m model_weights/gemma3-270m/hf_ckpts/checkpoint-500
+
+    # vLLM server mode
+    .venv/bin/python generate_dpo_rollouts.py qa_pairs_chunked_train.jsonl \
+        -o dpo_rollouts.jsonl --base-url http://localhost:8001/v1
 """
 
 import argparse
@@ -23,7 +26,6 @@ import time
 from pathlib import Path
 
 from loguru import logger
-from openai import AsyncOpenAI
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential_jitter
 
 N_ROLLOUTS = 5
@@ -65,6 +67,94 @@ def build_messages(question: str, context: str) -> list[dict]:
     ]
 
 
+# ============================================================================
+# HF Transformers mode (direct GPU inference, no server)
+# ============================================================================
+
+def main_hf(input_path: Path, output_path: Path, model_id: str) -> None:
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    # Load input
+    pairs = [json.loads(l) for l in input_path.read_text().strip().splitlines() if l.strip()]
+    logger.info(f"Loaded {len(pairs)} QA pairs from {input_path}")
+
+    # Resume support
+    done_keys = load_done_keys(output_path)
+    todo = [p for p in pairs if make_key(p["article_id"], p["question"]) not in done_keys]
+    logger.info(f"TODO: {len(todo)} questions ({len(pairs) - len(todo)} already done)")
+
+    if not todo:
+        logger.info("Nothing to do — all questions already processed")
+        return
+
+    # Load model
+    logger.info(f"Loading model: {model_id}")
+    tokenizer = AutoTokenizer.from_pretrained(model_id, padding_side="left")
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id,
+        torch_dtype=torch.bfloat16,
+        device_map="auto",
+        attn_implementation="sdpa",
+    )
+    model.eval()
+    logger.info(f"Model loaded on {model.device}")
+
+    t0 = time.monotonic()
+    written = 0
+    with open(output_path, "a") as f:
+        for pair in todo:
+            context = "\n\n".join(pair["context_chunks"])
+            messages = build_messages(pair["question"], context)
+            prompt = tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True,
+            )
+            inputs = tokenizer(
+                prompt, return_tensors="pt", truncation=True,
+                max_length=getattr(model.config, "max_position_embeddings", 8192) - MAX_TOKENS,
+            ).to(model.device)
+
+            rollouts = []
+            for _ in range(N_ROLLOUTS):
+                with torch.no_grad():
+                    outputs = model.generate(
+                        **inputs,
+                        max_new_tokens=MAX_TOKENS,
+                        do_sample=True,
+                        temperature=TEMPERATURE,
+                        top_k=0,
+                    )
+                input_len = inputs["input_ids"].shape[1]
+                generated = outputs[0][input_len:]
+                text = tokenizer.decode(generated, skip_special_tokens=True).strip()
+                rollouts.append(text)
+
+            record = {
+                "article_id": pair["article_id"],
+                "title": pair["title"],
+                "question": pair["question"],
+                "golden_answer": pair["golden_answer"],
+                "context": context,
+                "rollouts": rollouts,
+            }
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+            f.flush()
+            written += 1
+            if written % 100 == 0:
+                elapsed = time.monotonic() - t0
+                logger.info(f"Progress: {written}/{len(todo)} done ({elapsed:.0f}s, "
+                            f"{written / elapsed:.1f} q/s)")
+
+    elapsed = time.monotonic() - t0
+    logger.info(f"Done. {written} written in {elapsed:.1f}s ({written / max(elapsed, 0.1):.1f} q/s)")
+
+
+# ============================================================================
+# vLLM server mode (async OpenAI client)
+# ============================================================================
+
 @retry(
     stop=stop_after_attempt(5),
     wait=wait_exponential_jitter(initial=0.5, max=10, jitter=2),
@@ -74,8 +164,8 @@ def build_messages(question: str, context: str) -> list[dict]:
     ),
     reraise=True,
 )
-async def generate_one(
-    client: AsyncOpenAI,
+async def generate_one_vllm(
+    client: "AsyncOpenAI",
     semaphore: asyncio.Semaphore,
     model: str,
     messages: list[dict],
@@ -92,7 +182,9 @@ async def generate_one(
     return [choice.message.content or "" for choice in resp.choices]
 
 
-async def main(input_path: Path, output_path: Path, base_url: str, model: str) -> None:
+async def main_vllm(input_path: Path, output_path: Path, base_url: str, model: str) -> None:
+    from openai import AsyncOpenAI
+
     # Load input
     pairs = [json.loads(l) for l in input_path.read_text().strip().splitlines() if l.strip()]
     logger.info(f"Loaded {len(pairs)} QA pairs from {input_path}")
@@ -109,7 +201,6 @@ async def main(input_path: Path, output_path: Path, base_url: str, model: str) -
     client = AsyncOpenAI(api_key="dummy", base_url=base_url)
     semaphore = asyncio.Semaphore(MAX_CONCURRENT)
 
-    # Append mode for crash-safe checkpointing
     f = open(output_path, "a")
     written = 0
     failed = 0
@@ -119,9 +210,7 @@ async def main(input_path: Path, output_path: Path, base_url: str, model: str) -
         nonlocal written, failed
         context = "\n\n".join(pair["context_chunks"])
         messages = build_messages(pair["question"], context)
-
-        rollouts = await generate_one(client, semaphore, model, messages)
-
+        rollouts = await generate_one_vllm(client, semaphore, model, messages)
         record = {
             "article_id": pair["article_id"],
             "title": pair["title"],
@@ -130,7 +219,6 @@ async def main(input_path: Path, output_path: Path, base_url: str, model: str) -
             "context": context,
             "rollouts": rollouts,
         }
-
         async with lock:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
             f.flush()
@@ -138,7 +226,6 @@ async def main(input_path: Path, output_path: Path, base_url: str, model: str) -
             if written % 500 == 0:
                 logger.info(f"Progress: {written}/{len(todo)} done, {failed} failed")
 
-    # Process all — gather with return_exceptions so one failure doesn't kill everything
     t0 = time.monotonic()
     results = await asyncio.gather(
         *[process_one(p) for p in todo], return_exceptions=True,
@@ -158,15 +245,20 @@ async def main(input_path: Path, output_path: Path, base_url: str, model: str) -
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Generate DPO rollouts via vLLM server")
+    parser = argparse.ArgumentParser(description="Generate DPO rollouts")
     parser.add_argument("input", nargs="?", default="qa_pairs_chunked_train.jsonl",
                         help="Input JSONL with QA pairs")
     parser.add_argument("-o", "--output", default="dpo_rollouts.jsonl",
                         help="Output JSONL with rollouts")
+    parser.add_argument("-m", "--model", default="model_weights/gemma3-270m/hf_ckpts/checkpoint-500",
+                        help="HF model ID or local checkpoint path")
+    parser.add_argument("--hf", action="store_true",
+                        help="Use HF Transformers directly instead of vLLM server")
     parser.add_argument("--base-url", default="http://localhost:8001/v1",
-                        help="vLLM server base URL")
-    parser.add_argument("--model", default="model_weights/gemma3-270m/hf_ckpts/checkpoint-500",
-                        help="Model name for vLLM API")
+                        help="vLLM server base URL (ignored with --hf)")
     args = parser.parse_args()
 
-    asyncio.run(main(Path(args.input), Path(args.output), args.base_url, args.model))
+    if args.hf:
+        main_hf(Path(args.input), Path(args.output), args.model)
+    else:
+        asyncio.run(main_vllm(Path(args.input), Path(args.output), args.base_url, args.model))
