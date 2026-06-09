@@ -417,12 +417,14 @@ async def main(
             coros.append(evaluate_pair(client, semaphore, p, article_claims=ac.claims))
 
     done_count = 0
-    for coro in asyncio.as_completed(coros):
-        r = await coro
-        done_count += 1
-        if isinstance(r, Exception):
-            logger.error(f"Eval error: {r}")
+    for fut in asyncio.as_completed(coros):
+        try:
+            r = await fut
+        except Exception as e:
+            logger.error(f"Eval error: {e}")
+            done_count += 1
             continue
+        done_count += 1
         if r:
             results.append(r)
         if done_count % MAX_CONCURRENT == 0 or done_count == len(coros):
