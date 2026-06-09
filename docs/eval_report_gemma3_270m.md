@@ -109,35 +109,37 @@ Self-hosted scores ~9% higher F1 — likely a different model version or thinkin
 
 ### Full results (self-hosted judge)
 
-| Model | F1 | Precision | Recall | Delta F1 |
-|---|---|---|---|---|
-| Baseline (pre-trained) | 0.420 | 0.513 | 0.436 | — |
-| Step 1031 (5k, LR=3e-5) | 0.489 | 0.565 | 0.509 | +16.4% |
-| Step 3500 (5k, LR=3e-5) | 0.485 | 0.565 | 0.503 | +15.5% |
-| Final (5k, LR=3e-5) | 0.497 | 0.579 | 0.505 | +18.3% |
-| **Final (5k, LR=5e-5)** | **0.509** | **0.588** | **0.516** | **+21.2%** |
+Note: prior evals included `<reasoning>...</reasoning>` tags in model answers, inflating scores. Results below marked "(with reasoning)" are historical. Current evals strip reasoning before claim decomposition.
 
-**By difficulty (self-hosted judge)**
+| Model | F1 | Precision | Recall | Delta F1 | Note |
+|---|---|---|---|---|---|
+| Baseline (270M, pre-trained) | 0.420 | 0.513 | 0.436 | — | no reasoning tags |
+| Final (270M, 5k, LR=5e-5) | 0.509 | 0.588 | 0.516 | +21.2% | with reasoning (inflated) |
+| **Final (270M, 5k, LR=5e-5)** | **0.479** | **0.546** | **0.497** | **+14.0%** | **reasoning stripped** |
+| **Gemma3 27B (pre-trained)** | **0.706** | **0.726** | **0.753** | **+68.1%** | no reasoning tags |
 
-|  | Baseline | Step 1031 (3e-5) | Final (3e-5) | Final (5e-5) |
-|---|---|---|---|---|
-| easy | 0.501 | 0.559 | 0.589 | **0.631** |
-| medium | 0.433 | 0.505 | 0.495 | **0.498** |
-| hard | 0.327 | 0.402 | **0.408** | 0.398 |
+**By difficulty (self-hosted judge, reasoning stripped)**
 
-**Claim counts (self-hosted judge)**
+|  | Baseline (270M) | Final 5e-5 (270M) | Gemma3 27B |
+|---|---|---|---|
+| easy | 0.501 | 0.583 | **0.727** |
+| medium | 0.433 | 0.477 | **0.719** |
+| hard | 0.327 | 0.377 | **0.673** |
+
+**Claim counts (self-hosted judge, reasoning stripped)**
 
 |  | Supported | Contradicted | Unsupported | Uncovered |
 |---|---|---|---|---|
-| Baseline | 2.1 | 0.3 | 2.3 | 3.8 |
-| Final (3e-5) | 2.4 | 0.4 | 1.7 | 3.6 |
-| Final (5e-5) | 2.4 | 0.3 | 1.9 | 3.5 |
+| Baseline (270M) | 2.1 | 0.3 | 2.3 | 3.8 |
+| Final 5e-5 (270M) | 2.4 | 0.4 | 2.1 | 3.7 |
+| Gemma3 27B | 4.6 | 0.2 | 2.0 | 1.9 |
 
 ### Analysis
 
-- **LR=5e-5 is the best checkpoint** (F1=0.509, +21.2% over baseline). Google's recommended LR wins.
-- **Easy questions benefit most** from LR=5e-5 (0.631 vs 0.589 at 3e-5). Medium is comparable. Hard is a wash.
-- **Both finals beat step 1031** (lost checkpoint). Longer training on 5k articles continued to improve.
-- **Contradicted claims lowest at 5e-5** (0.3 vs 0.4 at 3e-5) — less hallucination with higher LR.
-- **Unsupported claims slightly higher at 5e-5** (1.9 vs 1.7) — model generates more claims overall, some not in reference.
+- **Reasoning tag inflation**: Including `<reasoning>` tags inflated 270M F1 from 0.479 to 0.509 (+6%). All comparisons should strip reasoning.
+- **Fine-tuning helps**: 270M final (LR=5e-5) F1=0.479, +14.0% over baseline (0.420). Google's recommended LR=5e-5 still wins.
+- **100x model size gap**: Gemma3 27B (F1=0.706) scores 47% higher than our best fine-tuned 270M (0.479). The gap is consistent across all difficulties.
+- **27B excels at recall**: 0.753 recall vs 0.497 — the larger model covers far more reference claims (1.9 uncovered vs 3.7).
+- **27B hallucinates less**: 0.2 contradicted claims vs 0.4, and higher precision (0.726 vs 0.546).
+- **Hard questions show largest gap**: 27B F1=0.673 vs 270M F1=0.377 — hard questions require reasoning capacity the 270M lacks.
 - Step 1031 checkpoint is lost (Trainer rotation). The final checkpoints supersede it.
