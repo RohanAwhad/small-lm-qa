@@ -34,8 +34,19 @@
 - Input: JSONL with `{question, golden_answer, context, rollouts: [str]}`
 - Output: same + `judgment: {best_idx, worst_idx, all_bad, all_good, explanation}`
 
+### Full pipeline implemented
+- `generate_dpo_rollouts.py` — async vLLM client, n=5 per request, temp=1.0, MAX_CONCURRENT=160, resume support
+- `judge_dpo_rollouts.py` — updated: env-based config (BASE_URL, DEEPSEEK_MODEL, MAX_CONCURRENT=20), added resume support
+- `build_dpo_pairs.py` — filters all_bad/all_good/invalid, outputs trl DPOTrainer format (prompt/chosen/rejected message lists)
+
+### Execution plan (rh-h100-01)
+1. Tear down DeepSeek → serve Gemma3 270M DP8 on port 8001
+2. `generate_dpo_rollouts.py` (MAX_CONCURRENT=160) → `dpo_rollouts.jsonl`
+3. Tear down Gemma3 → restart DeepSeek on port 8000
+4. `judge_dpo_rollouts.py` (MAX_CONCURRENT=20) → `dpo_rollouts_judged.jsonl`
+5. `build_dpo_pairs.py` → `dpo_pairs_train.jsonl`
+
 ### Next steps
-- Write `generate_dpo_rollouts.py` — vLLM client to sample N rollouts per prompt
-- Full pipeline: generate rollouts → judge → filter → format for DPO training
+- Deploy and run pipeline on node 01
 - DPO training script (likely via `trl` DPOTrainer)
 - Decide on beta and other hyperparams (LFM2's beta=5.0 worth trying at 270M scale)

@@ -17,6 +17,9 @@
 - `generate_gemma_answers.py` — re-answers questions using Gemma3 270M via local Ollama; tenacity retry, line-by-line file flush (not streaming inference: `stream=False`)
 - `generate_hf_answers.py` — batch HF Transformers inference on GPU; drop-in replacement for `generate_gemma_answers.py`. Auto-detects chunked input (`context_chunks`) vs full article. Use on remote GPU node with `.venv/bin/python`.
 - `summarize_scores.py` — pretty-prints RAGAS eval scores (P/R/F1, claim counts) grouped by difficulty
+- `generate_dpo_rollouts.py` — generates N rollouts per prompt via vLLM server (async, resume support). Output feeds `judge_dpo_rollouts.py`.
+- `judge_dpo_rollouts.py` — LLM-as-judge for DPO: sends all rollouts per question to DeepSeek Flash, picks best/worst idx. Evaluates reasoning + answer quality. Resume support. Config via env vars (`BASE_URL`, `DEEPSEEK_MODEL`, `MAX_CONCURRENT`).
+- `build_dpo_pairs.py` — filters judged rollouts (skip all_bad/all_good/invalid), formats into trl DPOTrainer JSONL (prompt/chosen/rejected message lists).
 - `evaluate_qa.py` — **legacy**: 1-5 judge format, superseded by `evaluate_ragas.py`
 - `compare_gemma.py` — **legacy**: evaluates Gemma3 against DeepSeek golden using old 1-5 format
 - `tests/test_schema.py` — validates JSONL output files against expected schema (read-only, no API)
@@ -45,6 +48,17 @@ uv run python verify_golden.py [input.jsonl] [-o output.jsonl]
 
 # Summarize RAGAS eval scores
 uv run python summarize_scores.py [path/to/ragas_eval.jsonl]
+
+# DPO data generation (run on rh-h100-01)
+# Step 1: Generate rollouts via vLLM-served model
+.venv/bin/python generate_dpo_rollouts.py qa_pairs_chunked_train.jsonl -o dpo_rollouts.jsonl --base-url http://localhost:8001/v1
+
+# Step 2: Judge rollouts via DeepSeek Flash (self-hosted)
+BASE_URL=http://localhost:8000/v1 DEEPSEEK_MODEL=deepseek-ai/DeepSeek-V4-Flash DEEPSEEK_API_KEY=dummy MAX_CONCURRENT=20 \
+  .venv/bin/python judge_dpo_rollouts.py dpo_rollouts.jsonl -o dpo_rollouts_judged.jsonl
+
+# Step 3: Build DPO pairs
+.venv/bin/python build_dpo_pairs.py dpo_rollouts_judged.jsonl -o dpo_pairs_train.jsonl
 
 # Tests (standalone scripts, not pytest)
 uv run python tests/test_schema.py          # validates existing JSONL files

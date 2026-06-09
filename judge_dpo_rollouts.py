@@ -22,9 +22,9 @@ from loguru import logger
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 
-DEEPSEEK_MODEL = "deepseek-v4-flash"
-BASE_URL = "https://api.deepseek.com"
-MAX_CONCURRENT = 50
+DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
+BASE_URL = os.environ.get("BASE_URL", "https://api.deepseek.com")
+MAX_CONCURRENT = int(os.environ.get("MAX_CONCURRENT", "20"))
 LOG_DIR = Path("logs")
 
 LOG_DIR.mkdir(exist_ok=True)
@@ -132,22 +132,49 @@ async def judge_all(records: list[dict]) -> list[dict]:
     return records
 
 
+def make_key(article_id: int, question: str) -> str:
+    return f"{article_id}::{question}"
+
+
+def load_done_keys(output_path: Path) -> dict[str, dict]:
+    """Load already-judged records for resume support. Returns key -> record."""
+    if not output_path.exists():
+        return {}
+    done = {}
+    for line in output_path.read_text().strip().splitlines():
+        if not line.strip():
+            continue
+        r = json.loads(line)
+        done[make_key(r["article_id"], r["question"])] = r
+    return done
+
+
 async def main(input_path: Path, output_path: Path) -> None:
     # Load rollouts
-    records = [json.loads(l) for l in input_path.read_text().strip().splitlines() if l.strip()]
-    logger.info(f"Loaded {len(records)} records from {input_path}")
+    all_records = [json.loads(l) for l in input_path.read_text().strip().splitlines() if l.strip()]
+    logger.info(f"Loaded {len(all_records)} records from {input_path}")
 
-    # Judge
-    records = await judge_all(records)
+    # Resume support
+    done = load_done_keys(output_path)
+    todo = [r for r in all_records if make_key(r["article_id"], r["question"]) not in done]
+    logger.info(f"TODO: {len(todo)} questions ({len(done)} already judged)")
 
-    # Write output
+    if todo:
+        # Judge remaining
+        judged = await judge_all(todo)
+        for r in judged:
+            done[make_key(r["article_id"], r["question"])] = r
+
+    # Write all results (preserves order from input)
     n_pairs = 0
     n_skipped = 0
     with open(output_path, "w") as f:
-        for r in records:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
-            j = r["judgment"]
-            if j["all_bad"] or j["all_good"] or j["best_idx"] is None or j["worst_idx"] is None:
+        for r in all_records:
+            key = make_key(r["article_id"], r["question"])
+            record = done.get(key, r)
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+            j = record.get("judgment", {})
+            if j.get("all_bad") or j.get("all_good") or j.get("best_idx") is None or j.get("worst_idx") is None:
                 n_skipped += 1
             else:
                 n_pairs += 1
