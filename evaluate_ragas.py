@@ -401,34 +401,33 @@ async def main(
         logger.info("All pairs already evaluated")
     t0 = time.monotonic()
 
-    for batch_start in range(0, len(pending), MAX_CONCURRENT):
-        batch = pending[batch_start : batch_start + MAX_CONCURRENT]
-        coros = []
-        for p in batch:
-            if "model_answer" in p:
-                rc = ref_cache.get(ref_key(p["article_id"], p["question"]))
-                if not rc:
-                    logger.warning(f"[{p['title']}] no reference claims found, skipping")
-                    continue
-                coros.append(evaluate_pair(client, semaphore, p, ref_claims=rc.claims))
-            else:
-                ac = art_cache.get(p["article_id"])
-                if not ac:
-                    logger.warning(f"[{p['title']}] no article claims for article_id={p['article_id']}, skipping")
-                    continue
-                coros.append(evaluate_pair(client, semaphore, p, article_claims=ac.claims))
-
-        batch_results = await asyncio.gather(*coros, return_exceptions=True)
-        for r in batch_results:
-            if isinstance(r, Exception):
-                logger.error(f"Eval error: {r}")
+    coros = []
+    for p in pending:
+        if "model_answer" in p:
+            rc = ref_cache.get(ref_key(p["article_id"], p["question"]))
+            if not rc:
+                logger.warning(f"[{p['title']}] no reference claims found, skipping")
                 continue
-            if r:
-                results.append(r)
+            coros.append(evaluate_pair(client, semaphore, p, ref_claims=rc.claims))
+        else:
+            ac = art_cache.get(p["article_id"])
+            if not ac:
+                logger.warning(f"[{p['title']}] no article claims for article_id={p['article_id']}, skipping")
+                continue
+            coros.append(evaluate_pair(client, semaphore, p, article_claims=ac.claims))
 
-        output_path.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in results))
-        remaining = len(pending) - (batch_start + len(batch))
-        logger.info(f"Progress: {len(results)}/{len(eval_pairs)} evaluated, {max(0, remaining)} remaining ({time.monotonic()-t0:.1f}s)")
+    done_count = 0
+    for coro in asyncio.as_completed(coros):
+        r = await coro
+        done_count += 1
+        if isinstance(r, Exception):
+            logger.error(f"Eval error: {r}")
+            continue
+        if r:
+            results.append(r)
+        if done_count % MAX_CONCURRENT == 0 or done_count == len(coros):
+            output_path.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in results))
+            logger.info(f"Progress: {len(results)}/{len(eval_pairs)} evaluated, {len(coros)-done_count} remaining ({time.monotonic()-t0:.1f}s)")
 
     # Summary
     elapsed = time.monotonic() - t0
