@@ -156,6 +156,7 @@ uv run python summarize_scores.py qa_test_hf_step500_ragas_eval.jsonl
 ```
 
 ## Self-hosted DeepSeek V4 Flash
+- **ASK ROHAN before deploying/restarting** — do not start vLLM on any node without explicit permission
 - Model: `deepseek-ai/DeepSeek-V4-Flash` on all 8 GPUs via vLLM
 - Currently deployed on rh-h100-07; reachable from node 01 at: `http://10.241.128.23:8000/v1`
 - Model name for API: `deepseek-ai/DeepSeek-V4-Flash`
