@@ -24,6 +24,7 @@ from pathlib import Path
 
 from loguru import logger
 from openai import AsyncOpenAI
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential_jitter
 
 N_ROLLOUTS = 5
 TEMPERATURE = 1.0
@@ -64,6 +65,33 @@ def build_messages(question: str, context: str) -> list[dict]:
     ]
 
 
+@retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential_jitter(initial=0.5, max=10, jitter=2),
+    retry=retry_if_exception_type(Exception),
+    before_sleep=lambda rs: logger.warning(
+        f"Rollout retry {rs.attempt_number}/5: {rs.outcome.exception()!r}"
+    ),
+    reraise=True,
+)
+async def generate_one(
+    client: AsyncOpenAI,
+    semaphore: asyncio.Semaphore,
+    model: str,
+    messages: list[dict],
+) -> list[str]:
+    """Generate N rollouts for a single prompt with retry."""
+    async with semaphore:
+        resp = await client.chat.completions.create(
+            model=model,
+            messages=messages,
+            n=N_ROLLOUTS,
+            temperature=TEMPERATURE,
+            max_tokens=MAX_TOKENS,
+        )
+    return [choice.message.content or "" for choice in resp.choices]
+
+
 async def main(input_path: Path, output_path: Path, base_url: str, model: str) -> None:
     # Load input
     pairs = [json.loads(l) for l in input_path.read_text().strip().splitlines() if l.strip()]
@@ -81,7 +109,7 @@ async def main(input_path: Path, output_path: Path, base_url: str, model: str) -
     client = AsyncOpenAI(api_key="dummy", base_url=base_url)
     semaphore = asyncio.Semaphore(MAX_CONCURRENT)
 
-    # Shared file handle for streaming writes
+    # Append mode for crash-safe checkpointing
     f = open(output_path, "a")
     written = 0
     failed = 0
@@ -92,16 +120,7 @@ async def main(input_path: Path, output_path: Path, base_url: str, model: str) -
         context = "\n\n".join(pair["context_chunks"])
         messages = build_messages(pair["question"], context)
 
-        async with semaphore:
-            resp = await client.chat.completions.create(
-                model=model,
-                messages=messages,
-                n=N_ROLLOUTS,
-                temperature=TEMPERATURE,
-                max_tokens=MAX_TOKENS,
-            )
-
-        rollouts = [choice.message.content or "" for choice in resp.choices]
+        rollouts = await generate_one(client, semaphore, model, messages)
 
         record = {
             "article_id": pair["article_id"],
@@ -119,22 +138,22 @@ async def main(input_path: Path, output_path: Path, base_url: str, model: str) -
             if written % 500 == 0:
                 logger.info(f"Progress: {written}/{len(todo)} done, {failed} failed")
 
-    # Process all
+    # Process all — gather with return_exceptions so one failure doesn't kill everything
     t0 = time.monotonic()
-    tasks = [process_one(p) for p in todo]
-
-    # Use gather with return_exceptions to not crash on individual failures
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    results = await asyncio.gather(
+        *[process_one(p) for p in todo], return_exceptions=True,
+    )
     for i, result in enumerate(results):
         if isinstance(result, Exception):
             failed += 1
-            logger.error(f"Failed article_id={todo[i]['article_id']}: {result}")
+            logger.error(f"Failed article_id={todo[i]['article_id']} "
+                         f"q='{todo[i]['question'][:60]}': {result}")
 
     f.close()
     elapsed = time.monotonic() - t0
     logger.info(
         f"Done. {written} written, {failed} failed in {elapsed:.1f}s "
-        f"({len(todo) / elapsed:.1f} q/s)"
+        f"({written / max(elapsed, 0.1):.1f} q/s)"
     )
 
 

@@ -7,6 +7,7 @@ Sends all rollouts per question to DeepSeek Flash, which picks best/worst idx.
 Judge evaluates reasoning quality, answer correctness, hallucination, and coherence.
 
 Output: JSONL with judgment attached (best_idx, worst_idx, all_bad, all_good, explanation).
+Resume support: appends results, skips already-judged questions on restart.
 """
 
 import argparse
@@ -21,6 +22,7 @@ from pathlib import Path
 from loguru import logger
 from openai import AsyncOpenAI
 from pydantic import BaseModel
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential_jitter
 
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
 BASE_URL = os.environ.get("BASE_URL", "https://api.deepseek.com")
@@ -85,101 +87,122 @@ def strip_reasoning(text: str) -> str:
     return re.sub(r"<reasoning>.*?</reasoning?>", "", text, flags=re.DOTALL).strip()
 
 
-async def judge_all(records: list[dict]) -> list[dict]:
-    """Send all rollouts per question to DeepSeek Flash, ask for best/worst."""
-    client = AsyncOpenAI(
-        api_key=os.environ["DEEPSEEK_API_KEY"],
-        base_url=BASE_URL,
-    )
-    semaphore = asyncio.Semaphore(MAX_CONCURRENT)
-
-    async def judge_one(r: dict) -> JudgeResult:
-        for attempt in range(3):
-            async with semaphore:
-                resp = await client.chat.completions.create(
-                    model=DEEPSEEK_MODEL,
-                    messages=[
-                        {"role": "system", "content": JUDGE_SYSTEM},
-                        {"role": "user", "content": JUDGE_USER.format(
-                            context=r["context"],
-                            question=r["question"],
-                            reference=r["golden_answer"],
-                            responses=format_responses(r["rollouts"]),
-                        )},
-                    ],
-                    response_format={"type": "json_object"},
-                )
-                content = resp.choices[0].message.content or ""
-                content = content.strip()
-                if content.startswith("```"):
-                    content = re.sub(r"^```(?:json)?\s*", "", content)
-                    content = re.sub(r"\s*```$", "", content)
-                try:
-                    return JudgeResult.model_validate_json(content)
-                except (json.JSONDecodeError, ValueError) as e:
-                    logger.warning(f"[retry {attempt+1}/3] Bad response for article_id={r.get('article_id')}: {e}")
-        return JudgeResult(best_idx=None, worst_idx=None, all_bad=True, all_good=False, explanation="judge failed")
-
-    logger.info(f"Judging {len(records)} questions with {DEEPSEEK_MODEL}...")
-    t0 = time.monotonic()
-    judgments = await asyncio.gather(*[judge_one(r) for r in records])
-    elapsed = time.monotonic() - t0
-    logger.info(f"Judging done: {elapsed:.1f}s ({len(records) / elapsed:.1f} q/s)")
-
-    for r, j in zip(records, judgments):
-        r["judgment"] = j.model_dump()
-
-    return records
-
-
 def make_key(article_id: int, question: str) -> str:
     return f"{article_id}::{question}"
 
 
-def load_done_keys(output_path: Path) -> dict[str, dict]:
-    """Load already-judged records for resume support. Returns key -> record."""
+def load_done_keys(output_path: Path) -> set[str]:
+    """Load already-judged keys for resume support."""
     if not output_path.exists():
-        return {}
-    done = {}
+        return set()
+    keys = set()
     for line in output_path.read_text().strip().splitlines():
         if not line.strip():
             continue
         r = json.loads(line)
-        done[make_key(r["article_id"], r["question"])] = r
-    return done
+        if "judgment" in r:
+            keys.add(make_key(r["article_id"], r["question"]))
+    logger.info(f"Resume: {len(keys)} questions already judged in {output_path}")
+    return keys
+
+
+@retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential_jitter(initial=0.5, max=10, jitter=2),
+    retry=retry_if_exception_type((json.JSONDecodeError, ValueError, Exception)),
+    before_sleep=lambda rs: logger.warning(
+        f"Judge retry {rs.attempt_number}/5: {rs.outcome.exception()!r}"
+    ),
+    reraise=True,
+)
+async def call_judge(
+    client: AsyncOpenAI,
+    semaphore: asyncio.Semaphore,
+    r: dict,
+) -> JudgeResult:
+    """Judge a single question's rollouts with retry. Semaphore outside retry."""
+    async with semaphore:
+        resp = await client.chat.completions.create(
+            model=DEEPSEEK_MODEL,
+            messages=[
+                {"role": "system", "content": JUDGE_SYSTEM},
+                {"role": "user", "content": JUDGE_USER.format(
+                    context=r["context"],
+                    question=r["question"],
+                    reference=r["golden_answer"],
+                    responses=format_responses(r["rollouts"]),
+                )},
+            ],
+            response_format={"type": "json_object"},
+        )
+    content = resp.choices[0].message.content
+    assert content, "Empty LLM response"
+    content = content.strip()
+    if content.startswith("```"):
+        content = re.sub(r"^```(?:json)?\s*", "", content)
+        content = re.sub(r"\s*```$", "", content)
+    return JudgeResult.model_validate_json(content)
 
 
 async def main(input_path: Path, output_path: Path) -> None:
-    # Load rollouts
+    # Load all records from input
     all_records = [json.loads(l) for l in input_path.read_text().strip().splitlines() if l.strip()]
     logger.info(f"Loaded {len(all_records)} records from {input_path}")
 
     # Resume support
-    done = load_done_keys(output_path)
-    todo = [r for r in all_records if make_key(r["article_id"], r["question"]) not in done]
-    logger.info(f"TODO: {len(todo)} questions ({len(done)} already judged)")
+    done_keys = load_done_keys(output_path)
+    todo = [r for r in all_records if make_key(r["article_id"], r["question"]) not in done_keys]
+    logger.info(f"TODO: {len(todo)} questions ({len(done_keys)} already judged)")
 
-    if todo:
-        # Judge remaining
-        judged = await judge_all(todo)
-        for r in judged:
-            done[make_key(r["article_id"], r["question"])] = r
+    if not todo:
+        logger.info("Nothing to do — all questions already judged")
+        return
 
-    # Write all results (preserves order from input)
-    n_pairs = 0
-    n_skipped = 0
-    with open(output_path, "w") as f:
-        for r in all_records:
-            key = make_key(r["article_id"], r["question"])
-            record = done.get(key, r)
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
-            j = record.get("judgment", {})
-            if j.get("all_bad") or j.get("all_good") or j.get("best_idx") is None or j.get("worst_idx") is None:
-                n_skipped += 1
-            else:
-                n_pairs += 1
+    client = AsyncOpenAI(api_key=os.environ["DEEPSEEK_API_KEY"], base_url=BASE_URL)
+    semaphore = asyncio.Semaphore(MAX_CONCURRENT)
 
-    logger.info(f"Done. {n_pairs} usable DPO pairs, {n_skipped} skipped. Output: {output_path}")
+    # Append mode for crash-safe checkpointing
+    f = open(output_path, "a")
+    written = 0
+    failed = 0
+    lock = asyncio.Lock()
+
+    async def judge_and_write(r: dict) -> None:
+        nonlocal written, failed
+        judgment = await call_judge(client, semaphore, r)
+        r["judgment"] = judgment.model_dump()
+
+        async with lock:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+            f.flush()
+            written += 1
+            if written % 100 == 0:
+                logger.info(f"Progress: {written}/{len(todo)} judged, {failed} failed")
+
+    # Process all
+    t0 = time.monotonic()
+    results = await asyncio.gather(
+        *[judge_and_write(r) for r in todo], return_exceptions=True,
+    )
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            failed += 1
+            logger.error(f"Failed article_id={todo[i].get('article_id')} "
+                         f"q='{todo[i]['question'][:60]}': {result}")
+
+    f.close()
+    elapsed = time.monotonic() - t0
+
+    n_pairs = sum(1 for r in todo if "judgment" in r
+                  and not r["judgment"].get("all_bad")
+                  and not r["judgment"].get("all_good")
+                  and r["judgment"].get("best_idx") is not None
+                  and r["judgment"].get("worst_idx") is not None)
+
+    logger.info(
+        f"Done. {written} judged, {failed} failed, {n_pairs} usable pairs "
+        f"in {elapsed:.1f}s ({written / max(elapsed, 0.1):.1f} q/s). Output: {output_path}"
+    )
 
 
 if __name__ == "__main__":
