@@ -31,6 +31,9 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 N_ROLLOUTS = 5
 TEMPERATURE = 1.0
 MAX_TOKENS = 1024
+MAX_MODEL_LEN = 2048
+TOKEN_BUFFER = 100  # headroom for chat template overhead
+MIN_OUTPUT_TOKENS = 64  # skip if less room than this
 MAX_CONCURRENT = 160
 LOG_DIR = Path("logs")
 SYSTEM_PROMPT = "Answer the question using the provided context."
@@ -65,6 +68,18 @@ def build_messages(question: str, context: str) -> list[dict]:
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {question}"},
     ]
+
+
+def estimate_prompt_tokens(messages: list[dict]) -> int:
+    """Rough token estimate: ~3.5 chars per token for English text."""
+    total_chars = sum(len(m["content"]) for m in messages)
+    return int(total_chars / 3.5)
+
+
+def compute_max_tokens(prompt_tokens: int) -> int:
+    """Dynamic max_tokens: fit within MAX_MODEL_LEN with buffer."""
+    available = MAX_MODEL_LEN - prompt_tokens - TOKEN_BUFFER
+    return min(available, MAX_TOKENS)
 
 
 # ============================================================================
@@ -169,6 +184,7 @@ async def generate_one_vllm(
     semaphore: asyncio.Semaphore,
     model: str,
     messages: list[dict],
+    max_tokens: int,
 ) -> list[str]:
     """Generate N rollouts for a single prompt with retry."""
     async with semaphore:
@@ -177,7 +193,7 @@ async def generate_one_vllm(
             messages=messages,
             n=N_ROLLOUTS,
             temperature=TEMPERATURE,
-            max_tokens=MAX_TOKENS,
+            max_tokens=max_tokens,
         )
     return [choice.message.content or "" for choice in resp.choices]
 
@@ -204,13 +220,24 @@ async def main_vllm(input_path: Path, output_path: Path, base_url: str, model: s
     f = open(output_path, "a")
     written = 0
     failed = 0
+    skipped = 0
     lock = asyncio.Lock()
 
     async def process_one(pair: dict) -> None:
-        nonlocal written, failed
+        nonlocal written, failed, skipped
         context = "\n\n".join(pair["context_chunks"])
         messages = build_messages(pair["question"], context)
-        rollouts = await generate_one_vllm(client, semaphore, model, messages)
+
+        prompt_tokens = estimate_prompt_tokens(messages)
+        max_tokens = compute_max_tokens(prompt_tokens)
+        if max_tokens < MIN_OUTPUT_TOKENS:
+            async with lock:
+                skipped += 1
+            logger.debug(f"Skipped article_id={pair['article_id']} — prompt too long "
+                         f"(~{prompt_tokens} tokens, only {max_tokens} left)")
+            return
+
+        rollouts = await generate_one_vllm(client, semaphore, model, messages, max_tokens)
         record = {
             "article_id": pair["article_id"],
             "title": pair["title"],
@@ -224,7 +251,7 @@ async def main_vllm(input_path: Path, output_path: Path, base_url: str, model: s
             f.flush()
             written += 1
             if written % 500 == 0:
-                logger.info(f"Progress: {written}/{len(todo)} done, {failed} failed")
+                logger.info(f"Progress: {written}/{len(todo)} done, {skipped} skipped, {failed} failed")
 
     t0 = time.monotonic()
     results = await asyncio.gather(
@@ -239,7 +266,7 @@ async def main_vllm(input_path: Path, output_path: Path, base_url: str, model: s
     f.close()
     elapsed = time.monotonic() - t0
     logger.info(
-        f"Done. {written} written, {failed} failed in {elapsed:.1f}s "
+        f"Done. {written} written, {skipped} skipped, {failed} failed in {elapsed:.1f}s "
         f"({written / max(elapsed, 0.1):.1f} q/s)"
     )
 
