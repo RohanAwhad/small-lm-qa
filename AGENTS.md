@@ -158,20 +158,20 @@ uv run python summarize_scores.py qa_test_hf_step500_ragas_eval.jsonl
 ## Self-hosted DeepSeek V4 Flash
 - **ASK ROHAN before deploying/restarting** — do not start vLLM on any node without explicit permission
 - Model: `deepseek-ai/DeepSeek-V4-Flash` on all 8 GPUs via vLLM
-- Currently deployed on rh-h100-07; reachable from node 01 at: `http://10.241.128.23:8000/v1`
+- Currently deployed on rh-h100-01: `http://localhost:8000/v1` (from node 01 itself)
 - Model name for API: `deepseek-ai/DeepSeek-V4-Flash`
 - Can replace DeepSeek API for RAGAS eval — set `BASE_URL` and `DEEPSEEK_MODEL` in eval scripts
 - Use `MAX_CONCURRENT = 10` when running against self-hosted (not 50 like public API)
 
 ### RAGAS eval via self-hosted model (on node 01)
 ```bash
-# Run from node 01 — uses DeepSeek V4 Flash on node 07 as LLM judge
+# Run from node 01 — uses DeepSeek V4 Flash on node 01 as LLM judge
 ssh rh-h100-01
 cd ~/rawhad/small_lm/qa
 DEEPSEEK_API_KEY=dummy .venv/bin/python -c "
 import evaluate_ragas, asyncio, os
 from pathlib import Path
-evaluate_ragas.BASE_URL = 'http://10.241.128.23:8000/v1'
+evaluate_ragas.BASE_URL = 'http://10.241.128.23:8000/v1'  # node 01 internal IP
 evaluate_ragas.DEEPSEEK_MODEL = 'deepseek-ai/DeepSeek-V4-Flash'
 evaluate_ragas.MAX_CONCURRENT = 10
 os.environ['DEEPSEEK_API_KEY'] = 'dummy'
