@@ -114,32 +114,36 @@ Note: prior evals included `<reasoning>...</reasoning>` tags in model answers, i
 | Model | F1 | Precision | Recall | Delta F1 | Note |
 |---|---|---|---|---|---|
 | Baseline (270M, pre-trained) | 0.420 | 0.513 | 0.436 | — | no reasoning tags |
-| Final (270M, 5k, LR=5e-5) | 0.509 | 0.588 | 0.516 | +21.2% | with reasoning (inflated) |
-| **Final (270M, 5k, LR=5e-5)** | **0.479** | **0.546** | **0.497** | **+14.0%** | **reasoning stripped** |
+| SFT Final (270M, 5k, LR=5e-5) | 0.479 | 0.546 | 0.497 | +14.0% | reasoning stripped |
+| DPO 1-GPU final | 0.517 | 0.578 | 0.529 | +23.1% | reasoning stripped |
+| **DPO 4-GPU step 955 (epoch 1)** | **0.532** | **0.546** | **0.612** | **+26.7%** | **reasoning stripped, best 270M** |
+| DPO 4-GPU step 1910 (epoch 2) | 0.507 | 0.524 | 0.581 | +20.7% | reasoning stripped, overfitting |
 | **Gemma3 27B (pre-trained)** | **0.706** | **0.726** | **0.753** | **+68.1%** | no reasoning tags |
 
 **By difficulty (self-hosted judge, reasoning stripped)**
 
-|  | Baseline (270M) | Final 5e-5 (270M) | Gemma3 27B |
-|---|---|---|---|
-| easy | 0.501 | 0.583 | **0.727** |
-| medium | 0.433 | 0.477 | **0.719** |
-| hard | 0.327 | 0.377 | **0.673** |
+|  | Baseline (270M) | SFT 5e-5 | DPO 4-GPU ep1 | DPO 4-GPU ep2 | Gemma3 27B |
+|---|---|---|---|---|---|
+| easy | 0.501 | 0.583 | 0.558 | 0.548 | **0.727** |
+| medium | 0.433 | 0.477 | 0.559 | 0.537 | **0.719** |
+| hard | 0.327 | 0.377 | 0.470 | 0.435 | **0.673** |
 
 **Claim counts (self-hosted judge, reasoning stripped)**
 
 |  | Supported | Contradicted | Unsupported | Uncovered |
 |---|---|---|---|---|
 | Baseline (270M) | 2.1 | 0.3 | 2.3 | 3.8 |
-| Final 5e-5 (270M) | 2.4 | 0.4 | 2.1 | 3.7 |
+| SFT 5e-5 (270M) | 2.4 | 0.4 | 2.1 | 3.7 |
+| DPO 4-GPU ep1 | 2.9 | 0.4 | 2.5 | 2.6 |
+| DPO 4-GPU ep2 | 3.0 | 0.5 | 3.0 | 3.2 |
 | Gemma3 27B | 4.6 | 0.2 | 2.0 | 1.9 |
 
 ### Analysis
 
-- **Reasoning tag inflation**: Including `<reasoning>` tags inflated 270M F1 from 0.479 to 0.509 (+6%). All comparisons should strip reasoning.
-- **Fine-tuning helps**: 270M final (LR=5e-5) F1=0.479, +14.0% over baseline (0.420). Google's recommended LR=5e-5 still wins.
-- **100x model size gap**: Gemma3 27B (F1=0.706) scores 47% higher than our best fine-tuned 270M (0.479). The gap is consistent across all difficulties.
-- **27B excels at recall**: 0.753 recall vs 0.497 — the larger model covers far more reference claims (1.9 uncovered vs 3.7).
-- **27B hallucinates less**: 0.2 contradicted claims vs 0.4, and higher precision (0.726 vs 0.546).
-- **Hard questions show largest gap**: 27B F1=0.673 vs 270M F1=0.377 — hard questions require reasoning capacity the 270M lacks.
+- **DPO is the best 270M result**: DPO 4-GPU epoch 1 (F1=0.532) beats SFT (0.479) by +11%. Biggest gain is recall (0.612 vs 0.497).
+- **DPO overfits by epoch 2**: F1 drops from 0.532 to 0.507. Unsupported claims rise (2.5 → 3.0), contradicted claims rise (0.4 → 0.5). Train for 1 epoch only.
+- **DPO closes the medium/hard gap**: Medium F1 jumps from 0.477 (SFT) to 0.559 (DPO). Hard from 0.377 to 0.470. DPO helps most where SFT struggled.
+- **Reasoning tag inflation**: Including `<reasoning>` tags inflated SFT F1 from 0.479 to 0.509 (+6%). All comparisons strip reasoning.
+- **100x model size gap remains**: Gemma3 27B (F1=0.706) still 33% higher than best 270M (0.532). Gap is largest on easy questions (0.727 vs 0.558).
+- **27B excels at precision and recall**: 0.726 precision and 0.753 recall vs 0.546/0.612 for best 270M. Fewer hallucinations and more complete answers.
 - Step 1031 checkpoint is lost (Trainer rotation). The final checkpoints supersede it.
