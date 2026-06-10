@@ -31,7 +31,7 @@ DPO_DATA = "dpo_pairs_train.jsonl"
 OUTPUT_DIR = "model_weights/gemma3-270m/dpo"
 MAX_SEQ_LEN = 1024
 BATCH_SIZE = 4
-GRAD_ACCUM_STEPS = 2  # 8 GPUs × 4 × 2 = 64 effective
+GRAD_ACCUM_STEPS = 4  # 4 GPUs × 4 × 4 = 64 effective
 LR = 1e-6
 BETA = 5.0
 NUM_EPOCHS = 10
@@ -71,7 +71,7 @@ class ManualWandbCallback(TrainerCallback):
 
 
 def main():
-    run_name = f"dpo-beta{BETA}-full-10ep-8gpu"
+    run_name = f"dpo-beta{BETA}-full-10ep-4gpu"
 
     if IS_RANK_0:
         wandb.init(
