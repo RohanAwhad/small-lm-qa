@@ -29,10 +29,9 @@ BATCH_SIZE = 4
 GRAD_ACCUM_STEPS = 16
 LR = 1e-6
 BETA = 5.0
-NUM_EPOCHS = 1
+NUM_EPOCHS = 10
 LOGGING_STEPS = 1
-SAVE_STEPS = 500
-N_SAMPLES = 10000  # testing; set to -1 for full dataset
+N_SAMPLES = -1  # full dataset
 
 
 # ============================================================================
@@ -65,7 +64,7 @@ class ManualWandbCallback(TrainerCallback):
 
 
 def main():
-    run_name = f"dpo-beta{BETA}-{N_SAMPLES}"
+    run_name = f"dpo-beta{BETA}-full-10ep"
 
     # Manual wandb init — don't rely on HF Trainer
     wandb.init(
@@ -105,8 +104,8 @@ def main():
         lr_scheduler_type="constant",
         warmup_ratio=0.1,
         logging_steps=LOGGING_STEPS,
-        save_steps=SAVE_STEPS,
-        save_total_limit=3,
+        save_strategy="epoch",
+        save_total_limit=None,
         dataloader_pin_memory=True,
         dataloader_num_workers=4,
         report_to="none",  # disable HF's wandb — we log manually
