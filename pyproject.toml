@@ -16,5 +16,6 @@ dependencies = [
     "sentence-transformers>=5.5.1",
     "tenacity>=9.1.4",
     "tinygrad>=0.13.0",
+    "trl>=1.5.1",
     "wandb>=0.27.0",
 ]
