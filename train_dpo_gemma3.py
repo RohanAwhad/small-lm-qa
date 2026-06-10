@@ -2,9 +2,14 @@
 
 Uses trl DPOTrainer with conversational message format.
 DPOTrainer handles tokenization + chat template internally.
+Supports multi-GPU via torchrun.
 
 Usage (on rh-h100-01):
+    # Single GPU
     .venv/bin/python train_dpo_gemma3.py
+
+    # Multi-GPU (8x H100)
+    torchrun --nproc_per_node=8 train_dpo_gemma3.py
 """
 
 import json
@@ -26,12 +31,14 @@ DPO_DATA = "dpo_pairs_train.jsonl"
 OUTPUT_DIR = "model_weights/gemma3-270m/dpo"
 MAX_SEQ_LEN = 1024
 BATCH_SIZE = 4
-GRAD_ACCUM_STEPS = 16
+GRAD_ACCUM_STEPS = 2  # 8 GPUs × 4 × 2 = 64 effective
 LR = 1e-6
 BETA = 5.0
 NUM_EPOCHS = 10
 LOGGING_STEPS = 1
 N_SAMPLES = -1  # full dataset
+
+IS_RANK_0 = int(os.environ.get("LOCAL_RANK", 0)) == 0
 
 
 # ============================================================================
@@ -46,7 +53,8 @@ def load_dataset(path: str, n_samples: int = -1) -> Dataset:
                 records.append(json.loads(line))
     if 0 < n_samples < len(records):
         records = records[:n_samples]
-    print(f"Loaded {len(records)} DPO pairs from {path}")
+    if IS_RANK_0:
+        print(f"Loaded {len(records)} DPO pairs from {path}")
     return Dataset.from_list(records)
 
 
@@ -55,32 +63,32 @@ def load_dataset(path: str, n_samples: int = -1) -> Dataset:
 # ============================================================================
 
 class ManualWandbCallback(TrainerCallback):
-    """Manual wandb logging — bypasses HF Trainer's wandb integration."""
+    """Manual wandb logging on rank 0 only."""
     def on_log(self, args, state, control, logs=None, **kwargs):
-        if logs:
-            # Filter out internal keys
+        if IS_RANK_0 and logs:
             metrics = {k: v for k, v in logs.items() if not k.startswith("_")}
             wandb.log(metrics, step=state.global_step)
 
 
 def main():
-    run_name = f"dpo-beta{BETA}-full-10ep"
+    run_name = f"dpo-beta{BETA}-full-10ep-8gpu"
 
-    # Manual wandb init — don't rely on HF Trainer
-    wandb.init(
-        project="small-lm-dpo",
-        name=run_name,
-        config={
-            "beta": BETA,
-            "lr": LR,
-            "batch_size": BATCH_SIZE,
-            "grad_accum": GRAD_ACCUM_STEPS,
-            "effective_bs": BATCH_SIZE * GRAD_ACCUM_STEPS,
-            "n_samples": N_SAMPLES,
-            "max_seq_len": MAX_SEQ_LEN,
-            "sft_model": SFT_MODEL,
-        },
-    )
+    if IS_RANK_0:
+        wandb.init(
+            project="small-lm-dpo",
+            name=run_name,
+            config={
+                "beta": BETA,
+                "lr": LR,
+                "batch_size": BATCH_SIZE,
+                "grad_accum": GRAD_ACCUM_STEPS,
+                "n_gpus": int(os.environ.get("WORLD_SIZE", 1)),
+                "effective_bs": BATCH_SIZE * GRAD_ACCUM_STEPS * int(os.environ.get("WORLD_SIZE", 1)),
+                "n_samples": N_SAMPLES,
+                "max_seq_len": MAX_SEQ_LEN,
+                "sft_model": SFT_MODEL,
+            },
+        )
 
     dataset = load_dataset(DPO_DATA, N_SAMPLES)
 
@@ -108,7 +116,7 @@ def main():
         save_total_limit=None,
         dataloader_pin_memory=True,
         dataloader_num_workers=4,
-        report_to="none",  # disable HF's wandb — we log manually
+        report_to="none",
         model_init_kwargs={
             "torch_dtype": torch.bfloat16,
             "attn_implementation": "sdpa",
@@ -125,12 +133,12 @@ def main():
 
     trainer.train()
 
-    final_dir = os.path.join(OUTPUT_DIR, "final")
-    trainer.save_model(final_dir)
-    trainer.processing_class.save_pretrained(final_dir)
-    print(f"Saved to {final_dir}")
-
-    wandb.finish()
+    if IS_RANK_0:
+        final_dir = os.path.join(OUTPUT_DIR, "final")
+        trainer.save_model(final_dir)
+        trainer.processing_class.save_pretrained(final_dir)
+        print(f"Saved to {final_dir}")
+        wandb.finish()
 
 
 if __name__ == "__main__":
