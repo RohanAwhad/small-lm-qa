@@ -57,6 +57,11 @@ def forward_kl_loss(
     temperature: float = 1.0,
 ) -> torch.Tensor:
     """Token-level forward KL: KL(teacher || student) on non-padding positions."""
+    # Align vocab sizes (student may have extra tokens like <image_soft_token>)
+    min_vocab = min(student_logits.shape[-1], teacher_logits.shape[-1])
+    student_logits = student_logits[..., :min_vocab]
+    teacher_logits = teacher_logits[..., :min_vocab]
+
     mask = labels != -100
 
     s_logits = student_logits[mask].float() / temperature
