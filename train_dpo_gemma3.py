@@ -55,19 +55,35 @@ def load_dataset(path: str, n_samples: int = -1) -> Dataset:
 # Main
 # ============================================================================
 
-class WandbFlushCallback(TrainerCallback):
-    """Explicitly log metrics to wandb history (HF Trainer sometimes only writes summary)."""
+class ManualWandbCallback(TrainerCallback):
+    """Manual wandb logging — bypasses HF Trainer's wandb integration."""
     def on_log(self, args, state, control, logs=None, **kwargs):
-        if wandb.run is not None and logs:
-            wandb.log(logs, step=state.global_step)
+        if logs:
+            # Filter out internal keys
+            metrics = {k: v for k, v in logs.items() if not k.startswith("_")}
+            wandb.log(metrics, step=state.global_step)
 
 
 def main():
-    os.environ.setdefault("WANDB_PROJECT", "small-lm-dpo")
+    run_name = f"dpo-beta{BETA}-{N_SAMPLES}"
+
+    # Manual wandb init — don't rely on HF Trainer
+    wandb.init(
+        project="small-lm-dpo",
+        name=run_name,
+        config={
+            "beta": BETA,
+            "lr": LR,
+            "batch_size": BATCH_SIZE,
+            "grad_accum": GRAD_ACCUM_STEPS,
+            "effective_bs": BATCH_SIZE * GRAD_ACCUM_STEPS,
+            "n_samples": N_SAMPLES,
+            "max_seq_len": MAX_SEQ_LEN,
+            "sft_model": SFT_MODEL,
+        },
+    )
 
     dataset = load_dataset(DPO_DATA, N_SAMPLES)
-
-    run_name = f"dpo-beta{BETA}-{len(dataset)}"
 
     config = DPOConfig(
         output_dir=OUTPUT_DIR,
@@ -93,8 +109,7 @@ def main():
         save_total_limit=3,
         dataloader_pin_memory=True,
         dataloader_num_workers=4,
-        report_to="wandb",
-        run_name=run_name,
+        report_to="none",  # disable HF's wandb — we log manually
         model_init_kwargs={
             "torch_dtype": torch.bfloat16,
             "attn_implementation": "sdpa",
@@ -106,7 +121,7 @@ def main():
         ref_model=None,
         args=config,
         train_dataset=dataset,
-        callbacks=[WandbFlushCallback()],
+        callbacks=[ManualWandbCallback()],
     )
 
     trainer.train()
@@ -115,6 +130,8 @@ def main():
     trainer.save_model(final_dir)
     trainer.processing_class.save_pretrained(final_dir)
     print(f"Saved to {final_dir}")
+
+    wandb.finish()
 
 
 if __name__ == "__main__":
