@@ -12,8 +12,10 @@ import os
 from pathlib import Path
 
 import torch
+import wandb
 from datasets import Dataset
 from trl import DPOConfig, DPOTrainer
+from transformers import TrainerCallback
 
 # ============================================================================
 # Config
@@ -52,6 +54,13 @@ def load_dataset(path: str, n_samples: int = -1) -> Dataset:
 # ============================================================================
 # Main
 # ============================================================================
+
+class WandbFlushCallback(TrainerCallback):
+    """Explicitly log metrics to wandb history (HF Trainer sometimes only writes summary)."""
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if wandb.run is not None and logs:
+            wandb.log(logs, step=state.global_step)
+
 
 def main():
     os.environ.setdefault("WANDB_PROJECT", "small-lm-dpo")
@@ -97,6 +106,7 @@ def main():
         ref_model=None,
         args=config,
         train_dataset=dataset,
+        callbacks=[WandbFlushCallback()],
     )
 
     trainer.train()
