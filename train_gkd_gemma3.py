@@ -39,7 +39,6 @@ TEACHER_MODEL = "google/gemma-3-4b-it"
 TRAIN_DATA = "qa_pairs_chunked_train.jsonl"
 OUTPUT_DIR = "model_weights/gemma3-270m/gkd"
 MAX_SEQ_LEN = 1024
-MAX_NEW_TOKENS = 512
 BATCH_SIZE = 2
 GRAD_ACCUM_STEPS = 32  # effective bs = 64
 LR = 1e-4
@@ -123,7 +122,7 @@ def main():
                 "batch_size": BATCH_SIZE,
                 "grad_accum": GRAD_ACCUM_STEPS,
                 "effective_bs": BATCH_SIZE * GRAD_ACCUM_STEPS,
-                "max_new_tokens": MAX_NEW_TOKENS,
+                "max_seq_len": MAX_SEQ_LEN,
                 "temperature": TEMPERATURE,
                 "num_steps": NUM_STEPS,
                 "loss": "forward_kl",
@@ -198,16 +197,17 @@ def main():
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
-                max_length=MAX_SEQ_LEN - MAX_NEW_TOKENS,
+                max_length=MAX_SEQ_LEN,
             ).to(STUDENT_GPU)
             prompt_len = prompt_inputs["input_ids"].shape[1]
+            max_new = MAX_SEQ_LEN - prompt_len
 
             # --- Phase 1: Student generates (no grad) ---
             student.eval()
             with torch.no_grad():
                 gen_outputs = student.generate(
                     **prompt_inputs,
-                    max_new_tokens=MAX_NEW_TOKENS,
+                    max_new_tokens=max_new,
                     do_sample=True,
                     temperature=TEMPERATURE,
                     top_k=0,
