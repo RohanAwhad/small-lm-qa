@@ -30,7 +30,7 @@ BETA = 5.0
 NUM_EPOCHS = 1
 LOGGING_STEPS = 1
 SAVE_STEPS = 500
-N_SAMPLES = 1000  # testing; set to -1 for full dataset
+N_SAMPLES = 10000  # testing; set to -1 for full dataset
 
 
 # ============================================================================
