@@ -28,7 +28,7 @@ from transformers import TrainerCallback
 
 SFT_MODEL = "model_weights/gemma3-270m/5k-articles-lr5e5/final"
 DPO_DATA = "dpo_pairs_train.jsonl"
-OUTPUT_DIR = "model_weights/gemma3-270m/dpo"
+OUTPUT_DIR = "model_weights/gemma3-270m/dpo-4gpu"
 MAX_SEQ_LEN = 1024
 BATCH_SIZE = 4
 GRAD_ACCUM_STEPS = 4  # 4 GPUs × 4 × 4 = 64 effective
