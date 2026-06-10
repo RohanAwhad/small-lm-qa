@@ -4,6 +4,14 @@ Teacher: Gemma3 4B-it (bf16, GPU 1)
 Student: Gemma3 270M DPO checkpoint (bf16, GPU 0)
 Loss: Forward KL on student-generated sequences (lambda=1.0)
 
+Vocab alignment note:
+  Student lm_head outputs 262,144 logits. Teacher lm_head outputs 262,208 logits.
+  Both share the same tokenizer (262,145 tokens, verified by text at every ID).
+  The teacher's extra 64 logit positions (262,144-262,207) are padding to a GPU-
+  friendly multiple of 64; only id=262,144 is defined (<image_soft_token>).
+  We slice both to [:262,144] before computing KL — safe because all extra
+  positions are at the end and unused in our QA data.
+
 References:
   - GKD: Agarwal et al., ICLR 2024 (arXiv:2306.13649)
   - Gemma 2/3 post-training distillation recipe
