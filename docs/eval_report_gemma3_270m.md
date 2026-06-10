@@ -8,6 +8,7 @@
   - **Run 1** (steps 500/1000/10000): ~200 articles, LR=3e-5, bs=16, grad_accum=4 (effective bs=64), 10 epochs, max_seq_len=1024
   - **Run 2** (step 1031, best): ~5000 articles, LR=3e-5, constant schedule, 1 epoch, same batch config. Checkpoint lost (Trainer rotated it out).
   - **Run 2 continued** (step 3500): same run, later checkpoint — mild overfitting vs step 1031
+  - **DPO** (on top of SFT 5e-5 final): DPO training using `dpo_pairs_train.jsonl` (chosen/rejected rollouts judged by DeepSeek). Best at epoch 1, overfits by epoch 2.
 - **Eval set**: `qa_pairs_chunked_test.jsonl` (600 pairs: 200 easy, 200 medium, 200 hard)
 - **Eval method**: RAGAS claim decomposition — P/R/F1 against golden reference answers
 - **Inference**: HF Transformers batch inference on H100 (`generate_hf_answers.py`, bs=64, bf16, SDPA)
