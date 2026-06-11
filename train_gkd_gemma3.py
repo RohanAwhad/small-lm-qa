@@ -192,12 +192,13 @@ def main():
 
             # Format prompts
             prompts = [format_prompt(r, tokenizer) for r in batch_records]
+            MIN_NEW_TOKENS = 64
             prompt_inputs = tokenizer(
                 prompts,
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
-                max_length=MAX_SEQ_LEN,
+                max_length=MAX_SEQ_LEN - MIN_NEW_TOKENS,
             ).to(STUDENT_GPU)
             prompt_len = prompt_inputs["input_ids"].shape[1]
             max_new = MAX_SEQ_LEN - prompt_len
