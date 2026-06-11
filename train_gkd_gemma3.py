@@ -34,7 +34,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 # Config
 # ============================================================================
 
-STUDENT_MODEL = "model_weights/gemma3-270m/dpo-4gpu/checkpoint-955"
+STUDENT_MODEL = "model_weights/gemma3-270m/gkd/checkpoint-200"
 TEACHER_MODEL = "google/gemma-3-4b-it"
 TRAIN_DATA = "qa_pairs_chunked_train.jsonl"
 OUTPUT_DIR = "model_weights/gemma3-270m/gkd"
@@ -42,8 +42,9 @@ MAX_SEQ_LEN = 1024
 BATCH_SIZE = 8
 GRAD_ACCUM_STEPS = 4  # effective bs = 32
 LR = 1e-4
-NUM_STEPS = 500
+NUM_STEPS = 300
 SAVE_EVERY = 100
+RESUME_STEP = 200  # for logging/checkpoint naming
 LOGGING_STEPS = 1
 TEMPERATURE = 1.0
 STUDENT_GPU = "cuda:0"
@@ -182,12 +183,12 @@ def main():
     random.shuffle(all_records)
 
     # --- Training loop ---
-    global_step = 0
+    global_step = RESUME_STEP
     accum_loss = 0.0
     optimizer.zero_grad()
 
     record_idx = 0
-    while global_step < NUM_STEPS:
+    while global_step < RESUME_STEP + NUM_STEPS:
         for micro_step in range(GRAD_ACCUM_STEPS):
             # Get batch of prompts
             batch_records = []
