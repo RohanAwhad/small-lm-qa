@@ -70,9 +70,12 @@ def run(
     logger.info(f"Processing {len(pairs)} pairs via {engine} (batch_size={batch_size})")
 
     # 3. Inference (engine-specific)
-    # TODO: dispatch to hf or vllm engine
-    # answers = engine_fn(messages_list, model, batch_size, ...)
-    raise NotImplementedError(f"Engine '{engine}' not yet implemented")
+    if engine == "hf":
+        from src.generation.hf_engine import generate
+        answers = generate(messages_list, model, batch_size)
+    elif engine == "vllm":
+        from src.generation.vllm_engine import generate
+        answers = generate(messages_list, model, batch_size, base_url)
 
     # 4. Write output
     model_label = Path(model).name if "/" not in model or model.startswith(".") else model
