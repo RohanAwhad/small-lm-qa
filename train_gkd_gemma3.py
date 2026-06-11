@@ -86,16 +86,6 @@ def forward_kl_loss(
 # Data
 # ============================================================================
 
-def load_prompts(path: str) -> list[dict]:
-    """Load QA pairs — we only need the prompts (context + question), not answers."""
-    records = []
-    with open(path) as f:
-        for line in f:
-            if line.strip():
-                records.append(json.loads(line))
-    return records
-
-
 def format_prompt(record: dict, tokenizer: AutoTokenizer) -> str:
     """Format a QA record into a chat prompt (system + user, no assistant)."""
     context = "\n\n".join(record["context_chunks"])
@@ -104,6 +94,25 @@ def format_prompt(record: dict, tokenizer: AutoTokenizer) -> str:
         {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {record['question']}"},
     ]
     return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+
+
+def load_prompts(path: str, tokenizer: AutoTokenizer, max_prompt_len: int) -> list[dict]:
+    """Load QA pairs, drop any where the prompt >= max_prompt_len tokens."""
+    records = []
+    n_dropped = 0
+    with open(path) as f:
+        for line in f:
+            if not line.strip():
+                continue
+            r = json.loads(line)
+            prompt = format_prompt(r, tokenizer)
+            tok_len = len(tokenizer.encode(prompt, add_special_tokens=False))
+            if tok_len >= max_prompt_len:
+                n_dropped += 1
+                continue
+            records.append(r)
+    print(f"Loaded {len(records)} prompts, dropped {n_dropped} (prompt >= {max_prompt_len} tokens)")
+    return records
 
 
 # ============================================================================
@@ -168,10 +177,9 @@ def main():
         weight_decay=0.01,
     )
 
-    # --- Load and shuffle prompts ---
-    all_records = load_prompts(TRAIN_DATA)
+    # --- Load and shuffle prompts (drop prompts >= MAX_SEQ_LEN tokens) ---
+    all_records = load_prompts(TRAIN_DATA, tokenizer, MAX_SEQ_LEN)
     random.shuffle(all_records)
-    print(f"Loaded {len(all_records)} prompts from {TRAIN_DATA}")
 
     # --- Training loop ---
     global_step = 0
@@ -192,13 +200,12 @@ def main():
 
             # Format prompts
             prompts = [format_prompt(r, tokenizer) for r in batch_records]
-            MIN_NEW_TOKENS = 64
             prompt_inputs = tokenizer(
                 prompts,
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
-                max_length=MAX_SEQ_LEN - MIN_NEW_TOKENS,
+                max_length=MAX_SEQ_LEN,
             ).to(STUDENT_GPU)
             prompt_len = prompt_inputs["input_ids"].shape[1]
             max_new = MAX_SEQ_LEN - prompt_len
