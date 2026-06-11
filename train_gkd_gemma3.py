@@ -34,7 +34,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 # Config
 # ============================================================================
 
-STUDENT_MODEL = "model_weights/gemma3-270m/gkd/checkpoint-200"
+STUDENT_MODEL = "model_weights/gemma3-270m/gkd/checkpoint-500"
 TEACHER_MODEL = "google/gemma-3-4b-it"
 TRAIN_DATA = "qa_pairs_chunked_train.jsonl"
 OUTPUT_DIR = "model_weights/gemma3-270m/gkd"
@@ -42,9 +42,9 @@ MAX_SEQ_LEN = 1024
 BATCH_SIZE = 8
 GRAD_ACCUM_STEPS = 4  # effective bs = 32
 LR = 1e-4
-NUM_STEPS = 300
+NUM_STEPS = 1500
 SAVE_EVERY = 100
-RESUME_STEP = 200  # for logging/checkpoint naming
+RESUME_STEP = 500  # for logging/checkpoint naming
 LOGGING_STEPS = 1
 TEMPERATURE = 1.0
 STUDENT_GPU = "cuda:0"
