@@ -1,58 +1,100 @@
 # qa — Wikipedia QA Dataset Pipeline
 
-Fine-tune Gemma3 270M for open-book QA with chain-of-thought reasoning.
+Fine-tune Gemma3 270M for open-book QA with chain-of-thought reasoning. Three-stage training: SFT → DPO → GKD.
 
-## Pipeline
+## Pipeline overview
 
 ```
-generate_qa.py          → qa_pairs.jsonl (15 QA pairs per article via DeepSeek)
-generate_chunked_qa.py  → qa_pairs_chunked.jsonl (chunk + retrieve + regen with reasoning)
-train_hf_gemma3.py      → model_weights/ (fine-tune on chunked QA)
+Wikipedia articles (download_wikipedia.py)
+    ↓
+generate_qa.py           → qa_pairs.jsonl           (15 QA pairs per article via DeepSeek)
+generate_chunked_qa.py   → qa_pairs_chunked.jsonl   (chunk + BM25 retrieve + regen with reasoning)
+split_train_test.py      → qa_train.json / qa_test.json
+    ↓
+train_hf_gemma3.py       → SFT checkpoint           (full fine-tune on chunked QA)
+    ↓
+generate_dpo_rollouts.py → dpo_rollouts.jsonl        (5 rollouts per prompt via vLLM)
+judge_dpo_rollouts.py    → dpo_rollouts_judged.jsonl (LLM-as-judge picks best/worst)
+build_dpo_pairs.py       → dpo_pairs_train.jsonl     (trl DPOTrainer format)
+train_dpo_gemma3.py      → DPO checkpoint            (preference alignment)
+    ↓
+train_gkd_gemma3.py      → GKD checkpoint            (Gemma3 4B teacher distillation)
 ```
 
-### 1. Generate golden QA pairs
+## Data generation
+
 ```bash
-uv run python generate_qa.py N              # N articles, resumes
+# Download Wikipedia articles (~6.4M, resumable)
+uv run python download_wikipedia.py [N]
+
+# Generate golden QA pairs (resumes)
+uv run python generate_qa.py N
+
+# Chunk + retrieve + regenerate with reasoning (resumes)
+uv run python generate_chunked_qa.py [N]
+
+# Train/test split
+uv run python split_train_test.py
 ```
 
-### 2. Chunk articles + retrieve + regenerate answers
+## Training
+
+All training runs on remote H100 GPU nodes. Use `.venv/bin/python` on the node (not `uv run`).
+
 ```bash
-uv run python generate_chunked_qa.py [N]    # all or N articles, resumes
+# SFT: full fine-tune on chunked QA
+.venv/bin/python train_hf_gemma3.py
+
+# DPO: preference alignment on top of SFT checkpoint
+# Single GPU or multi-GPU
+.venv/bin/python train_dpo_gemma3.py
+torchrun --nproc_per_node=8 train_dpo_gemma3.py
+
+# GKD: on-policy distillation from Gemma3 4B teacher (2 GPUs)
+.venv/bin/python train_gkd_gemma3.py
 ```
 
-Pipeline per article:
-- Recursive text splitting (512 tok max, Gemma3 tokenizer, separator hierarchy: `\n\n` → `\n` → `. ` → `, ` → ` `)
-- BM25 retrieval: top-3 chunks using golden answer as query
-- Answer regeneration from chunks (DeepSeek, captures reasoning_content)
-- RAGAS-style context precision + recall evaluation
+### Training configs
 
-### 3. Fine-tune
-```bash
-CUDA_VISIBLE_DEVICES=0 uv run python train_hf_gemma3.py
-```
+| Stage | Model | LR | Batch | Beta | Seq len |
+|-------|-------|----|-------|------|---------|
+| SFT | `unsloth/gemma-3-270m-it` | 3e-5 | 64 | — | 1024 |
+| DPO | SFT checkpoint | 1e-6 | 64 | 5.0 | 1024 |
+| GKD | DPO checkpoint (student) + `google/gemma-3-4b-it` (teacher) | 1e-4 | 32 | — | 1024 |
 
-Training format:
-```
-system: "Answer the question using the provided context."
-user:   "Context:\n{chunks}\n\nQuestion: {question}"
-assistant: "<reasoning>\n{reasoning}\n</reasoning>\n\n{answer}"
-```
-
-### Training config
-- Model: `unsloth/gemma-3-270m-it` (268M params, 262K vocab)
-- LR: 3e-5 constant (Google recommends 5e-5 for this model)
-- Effective batch: 64 (bs=16 x grad_accum=4)
-- Max seq len: 1024 tokens
-- Filters: reasoning <= 512 tokens, total seq <= 1024 tokens
-- 12,742 training examples (from 14,986 after filtering)
-- Wandb project: `small-lm-qa`
+Training format: `system: "Answer the question using the provided context." | user: context+question | assistant: <reasoning>...</reasoning> + answer`
 
 ## Evaluation
 
+Three answer generation backends (same output format):
+
 ```bash
-uv run python generate_gemma_answers.py [input.jsonl] [-o output.jsonl]
-uv run python evaluate_ragas.py [input.jsonl] --reference qa_pairs.jsonl [-o output.jsonl]
-uv run python summarize_scores.py [path/to/ragas_eval.jsonl]
+# Local Ollama (slowest, for small test sets)
+uv run python generate_gemma_answers.py qa_test.json -o qa_test_gemma.jsonl
+
+# Batch HF Transformers on GPU (remote node)
+.venv/bin/python generate_hf_answers.py qa_test.json -o qa_test_hf.jsonl -m <model_or_checkpoint>
+
+# vLLM API (when model is served)
+uv run python generate_vllm_answers.py qa_test.json -o qa_test_vllm.jsonl --base-url http://localhost:8000/v1 -m <model>
+```
+
+RAGAS evaluation (claim-based P/R/F1):
+
+```bash
+# New modular eval (src/evals/)
+uv run python -m src.evals.run qa_test_gemma.jsonl -o ragas_eval.jsonl
+uv run python -m src.evals.run qa_test_gemma.jsonl -o ragas_eval.jsonl --overwrite  # if output exists
+
+# With self-hosted DeepSeek judge
+uv run python -m src.evals.run qa_test_gemma.jsonl -o ragas_eval.jsonl \
+  --base-url http://localhost:8000/v1 --model deepseek-ai/DeepSeek-V4-Flash
+
+# Summarize scores
+uv run python summarize_scores.py ragas_eval.jsonl
+
+# Legacy eval (evaluate_ragas.py) — still works but superseded by src/evals/
+uv run python evaluate_ragas.py qa_test_gemma.jsonl --reference qa_pairs.jsonl -o ragas_eval.jsonl
 ```
 
 ## Tests
@@ -66,7 +108,8 @@ uv run python tests/test_e2e.py
 ```
 
 ## Dependencies
+
 - `uv` (Python 3.12)
-- `DEEPSEEK_API_KEY` for QA generation/evaluation
-- `WANDB_API_KEY` for training logging
-- H100 GPU for training (270M model, 262K vocab needs ~75GB VRAM)
+- `DEEPSEEK_API_KEY` for QA generation and evaluation
+- `WANDB_API_KEY` for training logging (project: `small-lm-qa`)
+- H100 GPU for training
