@@ -154,10 +154,11 @@ def main():
         run_name="gemma3-4b-sft-teacher",
         dataloader_pin_memory=True,
         dataloader_num_workers=4,
-        fsdp="full_shard auto_wrap",
+        fsdp="full_shard",
         fsdp_config={
             "forward_prefetch": True,
             "backward_prefetch": "backward_pre",
+            "transformer_layer_cls_to_wrap": "Gemma3DecoderLayer",
         },
     )
 
