@@ -83,10 +83,6 @@ def format_responses(rollouts: list[str]) -> str:
     return "\n\n".join(parts)
 
 
-def strip_reasoning(text: str) -> str:
-    return re.sub(r"<reasoning>.*?</reasoning?>", "", text, flags=re.DOTALL).strip()
-
-
 def make_key(article_id: int, question: str) -> str:
     return f"{article_id}::{question}"
 
