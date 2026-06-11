@@ -106,7 +106,7 @@ def load_prompts(path: str, tokenizer: AutoTokenizer, max_prompt_len: int) -> li
                 continue
             r = json.loads(line)
             prompt = format_prompt(r, tokenizer)
-            tok_len = len(tokenizer.encode(prompt, add_special_tokens=False))
+            tok_len = len(tokenizer.encode(prompt))
             if tok_len >= max_prompt_len:
                 n_dropped += 1
                 continue
