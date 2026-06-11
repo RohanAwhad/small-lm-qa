@@ -39,8 +39,8 @@ TEACHER_MODEL = "google/gemma-3-4b-it"
 TRAIN_DATA = "qa_pairs_chunked_train.jsonl"
 OUTPUT_DIR = "model_weights/gemma3-270m/gkd"
 MAX_SEQ_LEN = 1024
-BATCH_SIZE = 2
-GRAD_ACCUM_STEPS = 32  # effective bs = 64
+BATCH_SIZE = 8
+GRAD_ACCUM_STEPS = 4  # effective bs = 32
 LR = 1e-4
 NUM_STEPS = 500
 SAVE_EVERY = 100
