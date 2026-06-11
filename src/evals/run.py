@@ -1,8 +1,13 @@
-"""Run the full RAGAS eval pipeline for a single question."""
+"""Run the full RAGAS eval pipeline: single question or batch."""
 
 import asyncio
+import json
+import os
+import re
 from dataclasses import dataclass
+from pathlib import Path
 
+from loguru import logger
 from openai import AsyncOpenAI
 
 from src.evals.classify import ClassifyOutput, classify_claims
@@ -46,3 +51,93 @@ async def evaluate_single(
         classification=classification,
         score=compute_score(classification),
     )
+
+
+def _load_json_or_jsonl(path: Path) -> list[dict]:
+    raw = path.read_text().strip()
+    if raw.startswith("["):
+        return json.loads(raw)
+    return [json.loads(line.strip()) for line in raw.splitlines() if line.strip()]
+
+
+def _pair_key(article_id: int, question: str) -> str:
+    return f"{article_id}::{question}"
+
+
+def _strip_reasoning(text: str) -> str:
+    return re.sub(r"<reasoning>.*?</reasoning>", "", text, count=1, flags=re.DOTALL).strip()
+
+
+async def evaluate_all(
+    input_path: Path,
+    reference_path: Path,
+    output_path: Path,
+    model: str = "deepseek-v4-flash",
+    base_url: str = "https://api.deepseek.com",
+    max_concurrent: int = 50,
+    overwrite: bool = False,
+) -> list[dict]:
+    """Evaluate all pairs from input against reference, write results to output."""
+    if output_path.exists():
+        if not overwrite:
+            raise FileExistsError(f"Output file already exists: {output_path}. Pass overwrite=True to replace.")
+        output_path.unlink()
+
+    input_pairs = _load_json_or_jsonl(input_path)
+    ref_pairs = _load_json_or_jsonl(reference_path)
+    logger.info(f"Loaded {len(input_pairs)} input pairs, {len(ref_pairs)} reference pairs")
+
+    # Build ref lookup by article_id::question
+    ref_map: dict[str, dict] = {}
+    for rp in ref_pairs:
+        ref_map[_pair_key(rp["article_id"], rp["question"])] = rp
+
+    client = AsyncOpenAI(api_key=os.environ["DEEPSEEK_API_KEY"], base_url=base_url)
+    semaphore = asyncio.Semaphore(max_concurrent)
+    results: list[dict] = []
+
+    pairs_to_eval: list[dict] = []
+    coros = []
+    for pair in input_pairs:
+        key = _pair_key(pair["article_id"], pair["question"])
+        ref = ref_map.get(key)
+        if not ref:
+            logger.warning(f"[{pair.get('title', key)}] no reference found, skipping")
+            continue
+        agent_answer = _strip_reasoning(pair.get("model_answer", pair["answer"]))
+        pairs_to_eval.append(pair)
+        coros.append(evaluate_single(client, semaphore, ref["answer"], agent_answer, model))
+
+    eval_results = await asyncio.gather(*coros, return_exceptions=True)
+
+    for pair, result in zip(pairs_to_eval, eval_results):
+        if isinstance(result, Exception):
+            logger.error(f"[{pair.get('title', '')}] eval failed: {result}")
+            continue
+        results.append({
+            **pair,
+            "ref_claims": result.ref_claims,
+            "agent_claims": result.agent_claims,
+            "verdicts": result.classification.verdicts,
+            "uncovered_ref_indices": result.classification.uncovered_ref_indices,
+            "judge_reasoning": result.classification.reasoning,
+            "supported": result.score.supported,
+            "contradicted": result.score.contradicted,
+            "unsupported": result.score.unsupported,
+            "uncovered": result.score.uncovered,
+            "precision": result.score.precision,
+            "recall": result.score.recall,
+            "f1": result.score.f1,
+        })
+
+    output_path.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in results))
+
+    # Summary
+    if results:
+        avg_p = sum(r["precision"] for r in results) / len(results)
+        avg_r = sum(r["recall"] for r in results) / len(results)
+        avg_f1 = sum(r["f1"] for r in results) / len(results)
+        logger.info(f"=== Summary ({len(results)} pairs) === P={avg_p:.3f} R={avg_r:.3f} F1={avg_f1:.3f}")
+        logger.info(f"Output: {output_path}")
+
+    return results
