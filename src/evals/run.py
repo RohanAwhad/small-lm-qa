@@ -70,8 +70,8 @@ def _strip_reasoning(text: str) -> str:
 
 async def evaluate_all(
     input_path: Path,
-    reference_path: Path,
     output_path: Path,
+    reference_path: Path = Path("qa_pairs_chunked_test.jsonl"),
     model: str = "deepseek-v4-flash",
     base_url: str = "https://api.deepseek.com",
     max_concurrent: int = 50,
@@ -104,9 +104,9 @@ async def evaluate_all(
         if not ref:
             logger.warning(f"[{pair.get('title', key)}] no reference found, skipping")
             continue
-        agent_answer = _strip_reasoning(pair.get("model_answer", pair["answer"]))
+        agent_answer = _strip_reasoning(pair["model_answer"])
         pairs_to_eval.append(pair)
-        coros.append(evaluate_single(client, semaphore, ref["answer"], agent_answer, model))
+        coros.append(evaluate_single(client, semaphore, ref["regen_answer"], agent_answer, model))
 
     eval_results = await asyncio.gather(*coros, return_exceptions=True)
 
