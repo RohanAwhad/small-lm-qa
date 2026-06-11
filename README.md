@@ -83,7 +83,6 @@ uv run python -m src.generation.run qa_pairs_chunked_test.jsonl -o qa_test_vllm.
 RAGAS evaluation (claim-based P/R/F1):
 
 ```bash
-# New modular eval (src/evals/)
 uv run python -m src.evals.run qa_test_gemma.jsonl -o ragas_eval.jsonl
 uv run python -m src.evals.run qa_test_gemma.jsonl -o ragas_eval.jsonl --overwrite  # if output exists
 
@@ -93,9 +92,6 @@ uv run python -m src.evals.run qa_test_gemma.jsonl -o ragas_eval.jsonl \
 
 # Summarize scores
 uv run python summarize_scores.py ragas_eval.jsonl
-
-# Legacy eval (evaluate_ragas.py) — still works but superseded by src/evals/
-uv run python evaluate_ragas.py qa_test_gemma.jsonl --reference qa_pairs.jsonl -o ragas_eval.jsonl
 ```
 
 ## Tests

@@ -17,7 +17,6 @@
   - `src/evals/classify.py` — agent claims vs ref claims → SUPPORTED/CONTRADICTED/UNSUPPORTED verdicts (tenacity retry)
   - `src/evals/scoring.py` — verdicts → P/R/F1 (pure function)
   - `src/evals/run.py` — orchestration: `evaluate_single` + `evaluate_all` with CLI
-- `evaluate_ragas.py` — **legacy eval**: monolithic RAGAS eval, superseded by `src/evals/`
 - `verify_golden.py` — 4-vote LLM judge against Wikipedia article; unanimous = correct. No resume support (clears output on rerun).
 - `src/generation/` — **primary generation** (modular): load → messages → engine → output. See `src/generation/AGENTS.md` for details.
   - `src/generation/constants.py` — SamplingParams frozen dataclass, system prompt, message template
@@ -25,17 +24,12 @@
   - `src/generation/hf_engine.py` — batched HF Transformers inference
   - `src/generation/vllm_engine.py` — async vLLM API inference with tenacity retry
   - `src/generation/run.py` — orchestration: QAPair validation, engine dispatch, CLI
-- `generate_gemma_answers.py` — **legacy**: Ollama-based answer generation
-- `generate_hf_answers.py` — **legacy**: standalone HF inference, superseded by `src/generation/`
-- `generate_vllm_answers.py` — **legacy**: standalone vLLM inference, superseded by `src/generation/`
 - `summarize_scores.py` — pretty-prints RAGAS eval scores (P/R/F1, claim counts) grouped by difficulty
 - `generate_dpo_rollouts.py` — generates N rollouts per prompt via vLLM server (async, resume support). Dynamic `max_tokens` per prompt: `min(2048 - prompt_tokens - 100, 1024)`, skips prompts with <64 output tokens. Output feeds `judge_dpo_rollouts.py`.
 - `judge_dpo_rollouts.py` — LLM-as-judge for DPO: sends all rollouts per question to DeepSeek Flash, picks best/worst idx. Evaluates reasoning + answer quality. Resume support. Config via env vars (`BASE_URL`, `DEEPSEEK_MODEL`, `MAX_CONCURRENT`).
 - `build_dpo_pairs.py` — filters judged rollouts (skip all_bad/all_good/invalid), formats into trl DPOTrainer JSONL (prompt/chosen/rejected message lists).
 - `train_dpo_gemma3.py` — DPO training via trl DPOTrainer on top of SFT checkpoint. Multi-GPU via `torchrun --nproc_per_node=8`. Config: beta=5.0, LR=1e-6, effective batch=64.
 - `train_gkd_gemma3.py` — on-policy knowledge distillation (GKD): Gemma3 4B teacher → 270M student. Forward KL on student-generated sequences. Handles vocab size mismatch (student 262144 vs teacher 262208) by slicing.
-- `evaluate_qa.py` — **legacy**: 1-5 judge format, superseded by `evaluate_ragas.py`
-- `compare_gemma.py` — **legacy**: evaluates Gemma3 against DeepSeek golden using old 1-5 format
 - `tests/test_schema.py` — validates JSONL output files against expected schema (read-only, no API)
 - `tests/test_generate_evaluate.py` — QA gen + eval via local Gemma (req Ollama)
 - `tests/test_e2e.py` — end-to-end Gemma answer pipeline (req Ollama)
@@ -48,14 +42,12 @@ uv run python download_wikipedia.py [N]  # N optional, defaults to ALL
 # Generate QA from N articles (resumes — skips already-processed article_ids)
 uv run python generate_qa.py N
 
-# Generate Gemma3 answers (streams output line-by-line, tenacity retry on failures)
-uv run python generate_gemma_answers.py [input.jsonl] [-o output.jsonl]
+# Generate answers (HF or vLLM engine)
+uv run python -m src.generation.run <input.jsonl> -o <output.jsonl> -m <model>
+uv run python -m src.generation.run <input.jsonl> -o <output.jsonl> --engine vllm -m <model> --base-url <url>
 
 # RAGAS eval: claim-based P/R/F1 (modular, no resume — errors if output exists)
 uv run python -m src.evals.run <input.jsonl> -o <output.jsonl> [--overwrite]
-
-# Legacy RAGAS eval (has resume — skips already-evaluated pairs)
-uv run python evaluate_ragas.py [input.jsonl] --reference qa_pairs.jsonl [-o output.jsonl]
 
 # Validate multi-article QA: faithfulness + context relevance (has resume)
 uv run python validate_multi_qa.py [input.jsonl] [-o output.jsonl]
