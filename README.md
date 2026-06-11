@@ -66,17 +66,18 @@ Training format: `system: "Answer the question using the provided context." | us
 
 ## Evaluation
 
-Three answer generation backends (same output format):
+Answer generation (modular, via `src/generation/`):
 
 ```bash
-# Local Ollama (slowest, for small test sets)
-uv run python generate_gemma_answers.py qa_test.json -o qa_test_gemma.jsonl
-
-# Batch HF Transformers on GPU (remote node)
-.venv/bin/python generate_hf_answers.py qa_test.json -o qa_test_hf.jsonl -m <model_or_checkpoint>
+# HF Transformers on GPU (default engine)
+uv run python -m src.generation.run qa_pairs_chunked_test.jsonl -o qa_test_hf.jsonl -m <model_or_checkpoint>
 
 # vLLM API (when model is served)
-uv run python generate_vllm_answers.py qa_test.json -o qa_test_vllm.jsonl --base-url http://localhost:8000/v1 -m <model>
+uv run python -m src.generation.run qa_pairs_chunked_test.jsonl -o qa_test_vllm.jsonl \
+  --engine vllm -m <model> --base-url http://localhost:8000/v1
+
+# On remote GPU node
+.venv/bin/python -m src.generation.run qa_pairs_chunked_test.jsonl -o qa_test_hf.jsonl -m model_weights/gemma3-270m/hf_ckpts/checkpoint-500
 ```
 
 RAGAS evaluation (claim-based P/R/F1):

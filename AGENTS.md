@@ -19,9 +19,15 @@
   - `src/evals/run.py` — orchestration: `evaluate_single` + `evaluate_all` with CLI
 - `evaluate_ragas.py` — **legacy eval**: monolithic RAGAS eval, superseded by `src/evals/`
 - `verify_golden.py` — 4-vote LLM judge against Wikipedia article; unanimous = correct. No resume support (clears output on rerun).
-- `generate_gemma_answers.py` — re-answers questions using Gemma3 270M via local Ollama; tenacity retry, line-by-line file flush (not streaming inference: `stream=False`)
-- `generate_hf_answers.py` — batch HF Transformers inference on GPU; drop-in replacement for `generate_gemma_answers.py`. Auto-detects chunked input (`context_chunks`) vs full article. Use on remote GPU node with `.venv/bin/python`.
-- `generate_vllm_answers.py` — async answer generation via vLLM OpenAI-compatible API (semaphore-gated, MAX_CONCURRENT=32). Drop-in for `generate_hf_answers.py` when model is served via vLLM. Default model: `google/gemma-3-27b-it`.
+- `src/generation/` — **primary generation** (modular): load → messages → engine → output. See `src/generation/AGENTS.md` for details.
+  - `src/generation/constants.py` — SamplingParams frozen dataclass, system prompt, message template
+  - `src/generation/utils.py` — `generate_messages(context, question)` message builder
+  - `src/generation/hf_engine.py` — batched HF Transformers inference
+  - `src/generation/vllm_engine.py` — async vLLM API inference with tenacity retry
+  - `src/generation/run.py` — orchestration: QAPair validation, engine dispatch, CLI
+- `generate_gemma_answers.py` — **legacy**: Ollama-based answer generation
+- `generate_hf_answers.py` — **legacy**: standalone HF inference, superseded by `src/generation/`
+- `generate_vllm_answers.py` — **legacy**: standalone vLLM inference, superseded by `src/generation/`
 - `summarize_scores.py` — pretty-prints RAGAS eval scores (P/R/F1, claim counts) grouped by difficulty
 - `generate_dpo_rollouts.py` — generates N rollouts per prompt via vLLM server (async, resume support). Dynamic `max_tokens` per prompt: `min(2048 - prompt_tokens - 100, 1024)`, skips prompts with <64 output tokens. Output feeds `judge_dpo_rollouts.py`.
 - `judge_dpo_rollouts.py` — LLM-as-judge for DPO: sends all rollouts per question to DeepSeek Flash, picks best/worst idx. Evaluates reasoning + answer quality. Resume support. Config via env vars (`BASE_URL`, `DEEPSEEK_MODEL`, `MAX_CONCURRENT`).
