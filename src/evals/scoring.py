@@ -17,9 +17,9 @@ class Score:
 
 
 def compute_score(output: ClassifyOutput) -> Score:
-    supported = sum(1 for v in output.verdicts.values() if v == "SUPPORTED")
-    contradicted = sum(1 for v in output.verdicts.values() if v == "CONTRADICTED")
-    unsupported = sum(1 for v in output.verdicts.values() if v == "UNSUPPORTED")
+    supported = sum(1 for v in output.verdicts.values() if v.upper() == "SUPPORTED")
+    contradicted = sum(1 for v in output.verdicts.values() if v.upper() == "CONTRADICTED")
+    unsupported = sum(1 for v in output.verdicts.values() if v.upper() == "UNSUPPORTED")
     uncovered = len(output.uncovered_ref_indices)
 
     tp = supported
