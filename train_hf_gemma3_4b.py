@@ -23,8 +23,8 @@ TRAIN_DATA = "qa_pairs_chunked_train.jsonl"
 MAX_SEQ_LEN = 1024
 MAX_REASONING_TOKENS = 512
 OUTPUT_DIR = "model_weights/gemma3-4b/sft"
-BATCH_SIZE = 4
-GRAD_ACCUM_STEPS = 4  # effective bs = 4 * 4 GPUs * 4 = 64
+BATCH_SIZE = 2
+GRAD_ACCUM_STEPS = 8  # effective bs = 2 * 4 GPUs * 8 = 64
 LR = 5e-5
 NUM_EPOCHS = 1
 LOGGING_STEPS = 1
