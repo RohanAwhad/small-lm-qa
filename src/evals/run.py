@@ -141,3 +141,30 @@ async def evaluate_all(
         logger.info(f"Output: {output_path}")
 
     return results
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="RAGAS-style claim-based evaluation")
+    parser.add_argument("input", help="Input JSON/JSONL file with model_answer field")
+    parser.add_argument("-o", "--output", default=None, help="Output JSONL file (default: <input_stem>_ragas_eval.jsonl)")
+    parser.add_argument("--reference", default="qa_pairs_chunked_test.jsonl", help="Reference QA pairs file")
+    parser.add_argument("--model", default="deepseek-v4-flash", help="LLM judge model")
+    parser.add_argument("--base-url", default="https://api.deepseek.com", help="LLM API base URL")
+    parser.add_argument("--max-concurrent", type=int, default=50, help="Max concurrent LLM calls")
+    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing output file")
+    args = parser.parse_args()
+
+    in_path = Path(args.input)
+    out_path = Path(args.output) if args.output else in_path.with_stem(in_path.stem + "_ragas_eval").with_suffix(".jsonl")
+
+    asyncio.run(evaluate_all(
+        input_path=in_path,
+        output_path=out_path,
+        reference_path=Path(args.reference),
+        model=args.model,
+        base_url=args.base_url,
+        max_concurrent=args.max_concurrent,
+        overwrite=args.overwrite,
+    ))
