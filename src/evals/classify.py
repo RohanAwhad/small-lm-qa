@@ -5,6 +5,7 @@ import json
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel
+from tenacity import retry, stop_after_attempt, wait_exponential_jitter
 
 
 class ClassifyOutput(BaseModel):
@@ -31,6 +32,7 @@ Also list indices (0-based) of reference claims NOT covered by any agent claim.
 Respond in JSON format: {{"reasoning": "...", "verdicts": {{"claim text": "SUPPORTED"|"CONTRADICTED"|"UNSUPPORTED"}}, "uncovered_ref_indices": [0, 2]}}"""
 
 
+@retry(stop=stop_after_attempt(20), wait=wait_exponential_jitter(max=30))
 async def classify_claims(
     client: AsyncOpenAI,
     semaphore: asyncio.Semaphore,

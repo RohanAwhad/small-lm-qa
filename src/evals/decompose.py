@@ -5,6 +5,7 @@ import json
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel
+from tenacity import retry, stop_after_attempt, wait_exponential_jitter
 
 
 class DecompOutput(BaseModel):
@@ -26,6 +27,7 @@ Respond in JSON format: {{"reasoning": "brief note", "claims": ["claim1", "claim
 
 
 
+@retry(stop=stop_after_attempt(20), wait=wait_exponential_jitter(max=30))
 async def decompose_answer(
     client: AsyncOpenAI,
     semaphore: asyncio.Semaphore,
