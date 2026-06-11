@@ -1,0 +1,51 @@
+"""Decompose answers into atomic factual claims via LLM."""
+
+import asyncio
+import json
+
+from openai import AsyncOpenAI
+from pydantic import BaseModel
+
+
+class DecompOutput(BaseModel):
+    reasoning: str = ""
+    claims: list[str]
+
+
+
+REF_DECOMPOSE_SYSTEM = "You decompose answers into atomic factual claims. Respond only in json format."
+
+REF_DECOMPOSE_USER = """Break this answer into atomic factual claims. Each claim must be:
+1. A single, independently verifiable statement of fact
+2. Self-contained (understandable without additional context)
+3. Concise (one sentence per claim)
+
+Answer: {answer}
+
+Respond in JSON format: {{"reasoning": "brief note", "claims": ["claim1", "claim2", ...]}}"""
+
+
+
+async def decompose_answer(
+    client: AsyncOpenAI,
+    semaphore: asyncio.Semaphore,
+    answer: str,
+    model: str,
+) -> list[str] | None:
+    """Decompose any answer text into atomic claims."""
+    async with semaphore:
+        resp = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": REF_DECOMPOSE_SYSTEM},
+                {"role": "user", "content": REF_DECOMPOSE_USER.format(answer=answer)},
+            ],
+            response_format={"type": "json_object"},
+        )
+        raw = resp.choices[0].message.content
+        if not raw:
+            return None
+        return DecompOutput.model_validate(json.loads(raw)).claims
+
+
+
