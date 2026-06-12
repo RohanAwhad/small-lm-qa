@@ -29,13 +29,25 @@
 | Gemma3 270M baseline | 0.27B | 0.400 | 0.511 | 0.398 |
 | Gemma3 270M DPO ep1 | 0.27B | 0.495 | 0.497 | 0.578 |
 | Gemma3 270M SFT (5e-5) | 0.27B | 0.505 | 0.572 | 0.510 |
+| Gemma3 270M DPO ep2 | 0.27B | 0.513 | 0.524 | 0.590 |
+| Gemma3 270M DPO ep3 | 0.27B | 0.514 | 0.554 | 0.561 |
 | Gemma3 270M GKD step 1000 | 0.27B | 0.547 | 0.596 | 0.562 |
 | DeepSeek V4 Flash | MoE | 0.793 | 0.871 | 0.766 |
 
+### DPO epoch curve
+
+| Epoch | Step | F1 | Precision | Recall |
+|---|---|---|---|---|
+| 1 | 955 | 0.495 | 0.497 | 0.578 |
+| 2 | 1910 | 0.513 | 0.524 | 0.590 |
+| 3 | 2865 | 0.514 | 0.554 | 0.561 |
+
+DPO plateaus at ep2-3 (F1~0.514). Precision rises with more epochs (0.497 → 0.554) while recall drops (0.578 → 0.561). Unlike v1 eval which showed overfitting by ep2, v2 shows DPO stabilizing but still below GKD.
+
 ### Key findings
 
-- **GKD is the best 270M method** (F1=0.547), ahead of SFT (0.505) and DPO (0.495)
-- **DPO dropped below SFT** in v2 — high recall (0.578) but lowest precision (0.497) of all fine-tuned models. DPO generates more claims but many are unsupported.
+- **GKD is the best 270M method** (F1=0.547), ahead of DPO ep3 (0.514) and SFT (0.505)
+- **DPO doesn't overfit in v2** — ep2/ep3 slightly better than ep1, but all below GKD. Precision improves while recall trades off.
 - **GKD has the best precision** among 270M models (0.596) — distillation from 4B teacher produces more accurate claims
 - **DeepSeek ceiling at ~0.79** — 11/600 pairs score F1=0, mostly due to conservative `regen_answer` ("context doesn't specify") or genuinely wrong agent answers
 
@@ -53,6 +65,8 @@
 | 270M baseline | 0.420 | 0.400 | -0.020 |
 | 270M SFT | 0.479 | 0.505 | +0.026 |
 | 270M DPO ep1 | 0.532 | 0.495 | -0.037 |
+| 270M DPO ep2 | 0.507 | 0.513 | +0.006 |
+| 270M DPO ep3 | 0.495 | 0.514 | +0.019 |
 | 270M GKD step 1000 | 0.537 | 0.547 | +0.010 |
 | DeepSeek V4 Flash | 0.701 | 0.793 | +0.092 |
 
