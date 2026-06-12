@@ -29,11 +29,12 @@ async def evaluate_single(
     ref_answer: str,
     agent_answer: str,
     model: str,
+    question: str = "",
 ) -> EvalResult:
     """Decompose both answers, classify, and score."""
     ref_claims, agent_claims = await asyncio.gather(
-        decompose_answer(client, semaphore, ref_answer, model),
-        decompose_answer(client, semaphore, agent_answer, model),
+        decompose_answer(client, semaphore, ref_answer, model, question=question),
+        decompose_answer(client, semaphore, agent_answer, model, question=question),
     )
 
     if ref_claims is None:
@@ -106,7 +107,7 @@ async def evaluate_all(
             continue
         agent_answer = _strip_reasoning(pair["model_answer"])
         pairs_to_eval.append(pair)
-        coros.append(evaluate_single(client, semaphore, ref["regen_answer"], agent_answer, model))
+        coros.append(evaluate_single(client, semaphore, ref["regen_answer"], agent_answer, model, question=pair["question"]))
 
     eval_results = await asyncio.gather(*coros, return_exceptions=True)
 

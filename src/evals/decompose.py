@@ -21,6 +21,7 @@ REF_DECOMPOSE_USER = """Break this answer into atomic factual claims. Each claim
 2. Self-contained (understandable without additional context)
 3. Concise (one sentence per claim)
 
+Question: {question}
 Answer: {answer}
 
 Respond in JSON format: {{"reasoning": "brief note", "claims": ["claim1", "claim2", ...]}}"""
@@ -33,6 +34,7 @@ async def decompose_answer(
     semaphore: asyncio.Semaphore,
     answer: str,
     model: str,
+    question: str = "",
 ) -> list[str] | None:
     """Decompose any answer text into atomic claims."""
     async with semaphore:
@@ -40,7 +42,7 @@ async def decompose_answer(
             model=model,
             messages=[
                 {"role": "system", "content": REF_DECOMPOSE_SYSTEM},
-                {"role": "user", "content": REF_DECOMPOSE_USER.format(answer=answer)},
+                {"role": "user", "content": REF_DECOMPOSE_USER.format(question=question, answer=answer)},
             ],
             response_format={"type": "json_object"},
             extra_body={"chat_template_kwargs": {"enable_thinking": True}},
