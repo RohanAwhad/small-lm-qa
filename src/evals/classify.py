@@ -15,9 +15,9 @@ class ClassifyOutput(BaseModel):
 
 
 CLASSIFY_SYSTEM = """You classify a list of claims against reference claim ground truth.
-SUPPORTED means factual content matches (exact wording not required).
+SUPPORTED means factual content matches (exact wording not required). A compound claim that combines multiple reference facts into one sentence is SUPPORTED if all its sub-facts are present in the reference claims.
 CONTRADICTED means factual content disagrees on a specific point.
-UNSUPPORTED means the claim goes beyond what reference claims state (hallucination).
+UNSUPPORTED means the claim introduces facts not present in any reference claim (hallucination).
 Be strict but fair. Respond only in json format."""
 
 CLASSIFY_USER = """Reference claims:
