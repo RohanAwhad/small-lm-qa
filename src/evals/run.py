@@ -58,7 +58,7 @@ def _load_json_or_jsonl(path: Path) -> list[dict]:
     raw = path.read_text().strip()
     if raw.startswith("["):
         return json.loads(raw)
-    return [json.loads(line.strip()) for line in raw.splitlines() if line.strip()]
+    return [json.loads(line) for line in raw.split("\n") if line.strip()]
 
 
 def _pair_key(article_id: int, question: str) -> str:
