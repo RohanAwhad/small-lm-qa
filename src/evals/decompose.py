@@ -43,6 +43,7 @@ async def decompose_answer(
                 {"role": "user", "content": REF_DECOMPOSE_USER.format(answer=answer)},
             ],
             response_format={"type": "json_object"},
+            extra_body={"chat_template_kwargs": {"enable_thinking": True}},
         )
         raw = resp.choices[0].message.content
         if not raw:

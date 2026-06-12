@@ -52,6 +52,7 @@ async def classify_claims(
                 {"role": "user", "content": CLASSIFY_USER.format(ref_claims=ref_text, agent_claims=agent_text)},
             ],
             response_format={"type": "json_object"},
+            extra_body={"chat_template_kwargs": {"enable_thinking": True}},
         )
         raw = resp.choices[0].message.content
         if not raw:
