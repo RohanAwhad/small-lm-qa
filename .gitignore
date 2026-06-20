@@ -4,3 +4,5 @@ __pycache__/
 logs/
 model_weights/
 play.py
+/play.py.output.json
+/wandb
